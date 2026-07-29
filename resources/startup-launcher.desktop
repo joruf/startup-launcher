@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Startup Launcher
+Comment=Configurable login startup for programs and window placement
+Icon=startup-launcher.png
+Exec=python3 run.py
+Terminal=false
+Categories=Utility;
+StartupNotify=false

@@ -1,0 +1,47 @@
+[
+  {
+    "name": "Files (Folder Tabs)",
+    "group": "",
+    "command": "nemo --tabs /home/user/Projects /home/user/Downloads trash:///",
+    "window_mode": "maximized",
+    "match_mode": "class",
+    "match_string": "Nemo",
+    "enabled": true
+  },
+  {
+    "name": "Editor - project-a",
+    "group": "Editor",
+    "command": "code -n /home/user/Projects/project-a",
+    "window_mode": "maximized",
+    "match_mode": "title",
+    "match_string": "project-a",
+    "enabled": true
+  },
+  {
+    "name": "Editor - project-b",
+    "group": "Editor",
+    "command": "code -n /home/user/Projects/project-b",
+    "window_mode": "maximized",
+    "match_mode": "title",
+    "match_string": "project-b",
+    "enabled": false
+  },
+  {
+    "name": "Browser",
+    "group": "",
+    "command": "firefox",
+    "window_mode": "maximized",
+    "match_mode": "class",
+    "match_string": "Firefox",
+    "enabled": true
+  },
+  {
+    "name": "Mail Client",
+    "group": "",
+    "command": "thunderbird",
+    "window_mode": "normal",
+    "match_mode": "class",
+    "match_string": "",
+    "enabled": true
+  }
+]
