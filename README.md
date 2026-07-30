@@ -48,14 +48,19 @@ seeded from `entries.example.json` if present, or empty otherwise - see
   reflects and controls all of its members at once: checking/unchecking a
   group's box checks/unchecks every entry in that group. A group shows ☒
   when its members are mixed (some enabled, some not).
+- The **Launch** column's ▶ button opens the entry right from the table - or,
+  for a group row, every member of that group - the same action as the
+  toolbar's "Restart" button. This is the reliable way to launch from the
+  table now that most columns are click-to-edit: double-click still works
+  too, but only on cells that aren't inline-editable (Window Mode, or
+  anywhere on a group row), since a single click on the others opens the
+  editor instead.
 - **Group** — entries sharing the same group name (e.g. "VSCode") are shown
-  nested under one node in the tree. Double-click/"Restart" on the group
-  node starts every entry in the group; double-click on a single entry
-  starts only that one (double-click only reaches "Restart" on cells that
-  aren't inline-editable, since a single click there opens the editor
-  instead - Window Mode, or anywhere on a group row, always works). "Delete"
-  on the group node removes the whole group (with confirmation); "Edit"/
-  "Move Up"/"Move Down" only apply to individual entries.
+  nested under one node in the tree. Clicking ▶ (or "Restart") on the group
+  node starts every entry in the group; clicking it on a single entry
+  starts only that one. "Delete" on the group node removes the whole group
+  (with confirmation); "Edit"/"Move Up"/"Move Down" only apply to individual
+  entries.
 - **Move Up / Move Down** — change the order of entries.
 - **Start All** runs every enabled entry (like the old bash script),
   respecting each entry's delay.

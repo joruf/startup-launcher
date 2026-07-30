@@ -22,11 +22,14 @@ from ui.window_icon import apply_window_icon
 CHECKED = "☑"  # ☑
 UNCHECKED = "☐"  # ☐
 PARTIAL = "☒"  # ☒ (some, but not all, group members enabled)
+LAUNCH_GLYPH = "▶"
 
 # ttk.Treeview only lets #0 show a per-item image; a data column can't render
-# anything bigger than the rest of the row's text. So the checkbox is drawn with
-# a real Label placed on top of that cell instead - the only way to make just
-# the checkbox bigger while every other column keeps its normal size.
+# anything bigger than the rest of the row's text. So the checkbox and the
+# per-row launch button are drawn with a real Label placed on top of that cell
+# instead - the only way to make them bigger while every other column keeps
+# its normal size, and the only way to give a data column a clickable "button"
+# at all.
 CHECKBOX_FONT = ("TkDefaultFont", 15)
 
 # Slightly smaller than the row's default font so the inline Entry/Spinbox
@@ -36,10 +39,13 @@ INLINE_EDIT_FONT = ("TkDefaultFont", 9)
 
 ENTRIES_POLL_INTERVAL_MS = 2000
 
-# Columns after the tree's own #0 (Name) column.
-COLUMNS = ("enabled", "mode", "delay", "command", "xy", "size")
+# Columns after the tree's own #0 (Name) column. "launch" isn't sortable (no
+# underlying data to sort by), so it's excluded from the header-click-to-sort
+# wiring in __init__.
+COLUMNS = ("launch", "enabled", "mode", "delay", "command", "xy", "size")
 COLUMN_LABELS = {
     "#0": "Name",
+    "launch": "Launch",
     "enabled": "Enabled",
     "mode": "Window Mode",
     "delay": "Delay (s)",
@@ -48,14 +54,15 @@ COLUMN_LABELS = {
     "size": "Size",
 }
 # Treeview column ids ("#0", "#1", ...) that support single-click inline editing,
-# mapped to the entry/geometry field they edit. "enabled" (checkbox) and "mode"
-# (fixed set of options, edited via the New/Edit dialog) are deliberately excluded.
+# mapped to the entry/geometry field they edit. "launch" (button) and "enabled"
+# (checkbox) are overlay widgets, not text; "mode" is a fixed set of options
+# edited via the New/Edit dialog. All three are deliberately excluded here.
 EDITABLE_FIELD_BY_TREECOL = {
     "#0": "name",
-    "#3": "delay",
-    "#4": "command",
-    "#5": "xy",
-    "#6": "size",
+    "#4": "delay",
+    "#5": "command",
+    "#6": "xy",
+    "#7": "size",
 }
 
 
@@ -85,6 +92,7 @@ class StartupLauncherApp:
         self._auto_run = auto_run
         self._scan_job_id = None
         self._checkbox_labels = {}
+        self._launch_labels = {}
         self._active_edit = None
         self._suppress_next_global_close = False
         self._sort_column = None
@@ -111,12 +119,16 @@ class StartupLauncherApp:
             tree_frame, columns=COLUMNS, show="tree headings", selectmode="browse"
         )
         for col in ("#0",) + COLUMNS:
-            self.tree.heading(col, text=COLUMN_LABELS[col], command=lambda c=col: self._sort_by(c))
+            if col == "launch":
+                self.tree.heading(col, text=COLUMN_LABELS[col])
+            else:
+                self.tree.heading(col, text=COLUMN_LABELS[col], command=lambda c=col: self._sort_by(c))
         self.tree.column("#0", width=220)
+        self.tree.column("launch", width=55, anchor="center")
         self.tree.column("enabled", width=70, anchor="center")
         self.tree.column("mode", width=110, anchor="w")
         self.tree.column("delay", width=70, anchor="center")
-        self.tree.column("command", width=300)
+        self.tree.column("command", width=290)
         self.tree.column("xy", width=100, anchor="w")
         self.tree.column("size", width=110, anchor="w")
         self.tree.pack(side="left", fill="both", expand=True)
@@ -128,9 +140,9 @@ class StartupLauncherApp:
         self.tree.bind("<Double-1>", self._on_double_click)
         self.tree.bind("<Button-1>", self._on_tree_click)
         self.tree.bind("<Button-3>", self._on_tree_context_menu)
-        self.tree.bind("<Configure>", lambda _e: self._position_checkbox_overlays())
-        self.tree.bind("<<TreeviewOpen>>", lambda _e: self.root.after_idle(self._position_checkbox_overlays))
-        self.tree.bind("<<TreeviewClose>>", lambda _e: self.root.after_idle(self._position_checkbox_overlays))
+        self.tree.bind("<Configure>", lambda _e: self._position_overlays())
+        self.tree.bind("<<TreeviewOpen>>", lambda _e: self.root.after_idle(self._position_overlays))
+        self.tree.bind("<<TreeviewClose>>", lambda _e: self.root.after_idle(self._position_overlays))
         self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
         root.bind_all("<Button-1>", self._on_global_click, add="+")
 
@@ -297,7 +309,7 @@ class StartupLauncherApp:
         else:
             self._log("System tray unavailable (GTK3 bindings missing). Window stays open.")
             self.root.deiconify()
-            self.root.after_idle(self._position_checkbox_overlays)
+            self.root.after_idle(self._position_overlays)
 
     def _hide_to_tray(self):
         self.root.withdraw()
@@ -307,7 +319,7 @@ class StartupLauncherApp:
         self.root.deiconify()
         self.root.lift()
         self.root.focus_force()
-        self.root.after_idle(self._position_checkbox_overlays)
+        self.root.after_idle(self._position_overlays)
 
     def _quit_application(self):
         if self._exiting:
@@ -362,6 +374,7 @@ class StartupLauncherApp:
                 iid=f"e{index}",
                 text=entry["name"],
                 values=(
+                    "",
                     CHECKED if entry.get("enabled", True) else UNCHECKED,
                     entry_model.WINDOW_MODE_LABELS[entry["window_mode"]],
                     str(entry.get("delay_seconds", 0)),
@@ -384,7 +397,7 @@ class StartupLauncherApp:
         if selected and self.tree.exists(selected[0]):
             self.tree.selection_set(selected[0])
 
-        self.root.after_idle(self._position_checkbox_overlays)
+        self.root.after_idle(self._position_overlays)
 
     def _selected_id(self):
         selection = self.tree.selection()
@@ -446,7 +459,7 @@ class StartupLauncherApp:
     # -- row selection / context menu --------------------------------------
 
     def _on_tree_select(self, _event=None):
-        self._position_checkbox_overlays()
+        self._position_overlays()
         self._update_action_buttons()
 
     def _update_action_buttons(self):
@@ -489,11 +502,11 @@ class StartupLauncherApp:
 
         self.context_menu.tk_popup(event.x_root, event.y_root)
 
-    # -- checkbox toggling -------------------------------------------------
+    # -- checkbox / launch-button overlays ----------------------------------
 
     def _on_tree_scroll(self, first, last):
         self._tree_scrollbar.set(first, last)
-        self._position_checkbox_overlays()
+        self._position_overlays()
 
     def _all_iids(self, parent=""):
         result = []
@@ -508,30 +521,53 @@ class StartupLauncherApp:
         index = self._entry_index(iid)
         return CHECKED if self.entries[index].get("enabled", True) else UNCHECKED
 
-    def _position_checkbox_overlays(self):
-        for label in self._checkbox_labels.values():
+    def _position_overlays(self):
+        """Redraw both the per-row Enabled checkbox and Launch button overlays."""
+        self._rebuild_column_overlay(
+            "enabled", self._checkbox_labels, self._checkbox_overlay_style, self._on_checkbox_click
+        )
+        self._rebuild_column_overlay(
+            "launch", self._launch_labels, self._launch_overlay_style, self._on_launch_click
+        )
+
+    def _checkbox_overlay_style(self, iid):
+        state = self._checkbox_state(iid)
+        return state, MUTED_FG if state == UNCHECKED else TEXT_FG
+
+    def _launch_overlay_style(self, _iid):
+        return LAUNCH_GLYPH, TEXT_FG
+
+    def _rebuild_column_overlay(self, column, labels, style_fn, on_click):
+        """
+        Recreate the clickable Label overlays for one Treeview data column.
+
+        ttk.Treeview can't render a bigger glyph or a clickable "button" in a
+        plain data column, so both the Enabled checkbox and the Launch button
+        are drawn as real widgets placed on top of their cell instead.
+        """
+        for label in labels.values():
             label.destroy()
-        self._checkbox_labels = {}
+        labels.clear()
 
         for iid in self._all_iids():
-            bbox = self.tree.bbox(iid, column="enabled")
+            bbox = self.tree.bbox(iid, column=column)
             if not bbox:
                 continue
             x, y, width, height = bbox
 
-            state = self._checkbox_state(iid)
+            text, foreground = style_fn(iid)
             is_selected = iid in self.tree.selection()
             label = tk.Label(
                 self.tree,
-                text=state,
+                text=text,
                 font=CHECKBOX_FONT,
                 background=SELECTION_COLOR if is_selected else PANEL_BG,
-                foreground=MUTED_FG if state == UNCHECKED else TEXT_FG,
+                foreground=foreground,
                 cursor="hand2",
             )
             label.place(x=x, y=y, width=width, height=height)
-            label.bind("<Button-1>", lambda _e, target=iid: self._on_checkbox_click(target))
-            self._checkbox_labels[iid] = label
+            label.bind("<Button-1>", lambda _e, target=iid: on_click(target))
+            labels[iid] = label
 
     def _on_checkbox_click(self, iid):
         self._cancel_inline_edit()
@@ -540,6 +576,11 @@ class StartupLauncherApp:
             self._toggle_group(iid[2:])
         else:
             self._toggle_entry(self._entry_index(iid))
+
+    def _on_launch_click(self, iid):
+        self._cancel_inline_edit()
+        self.tree.selection_set(iid)
+        self._start_selected()
 
     def _toggle_entry(self, index):
         entry = self.entries[index]
