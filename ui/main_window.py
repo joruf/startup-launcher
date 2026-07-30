@@ -29,6 +29,11 @@ PARTIAL = "☒"  # ☒ (some, but not all, group members enabled)
 # the checkbox bigger while every other column keeps its normal size.
 CHECKBOX_FONT = ("TkDefaultFont", 15)
 
+# Slightly smaller than the row's default font so the inline Entry/Spinbox
+# overlays (see _begin_inline_edit) don't clip descenders against the fixed
+# row height.
+INLINE_EDIT_FONT = ("TkDefaultFont", 9)
+
 ENTRIES_POLL_INTERVAL_MS = 2000
 
 # Columns after the tree's own #0 (Name) column.
@@ -81,6 +86,7 @@ class StartupLauncherApp:
         self._scan_job_id = None
         self._checkbox_labels = {}
         self._active_edit = None
+        self._suppress_next_global_close = False
         self._sort_column = None
         self._sort_reverse = False
         self._button_bar_rows = 1
@@ -126,6 +132,7 @@ class StartupLauncherApp:
         self.tree.bind("<<TreeviewOpen>>", lambda _e: self.root.after_idle(self._position_checkbox_overlays))
         self.tree.bind("<<TreeviewClose>>", lambda _e: self.root.after_idle(self._position_checkbox_overlays))
         self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
+        root.bind_all("<Button-1>", self._on_global_click, add="+")
 
         status_frame = ttk.Frame(root, padding=(10, 0, 10, 10))
         status_frame.pack(fill="both")
@@ -581,11 +588,19 @@ class StartupLauncherApp:
 
         var = tk.StringVar(value=current_text)
         if field == "delay":
-            widget = ttk.Spinbox(self.tree, from_=0, to=60, textvariable=var, width=5)
+            widget = ttk.Spinbox(
+                self.tree, from_=0, to=60, textvariable=var, width=5, font=INLINE_EDIT_FONT
+            )
         else:
-            widget = ttk.Entry(self.tree, textvariable=var)
+            widget = ttk.Entry(self.tree, textvariable=var, font=INLINE_EDIT_FONT)
 
-        widget.place(x=x, y=y, width=width, height=height)
+        # A row-height-tall Entry/Spinbox clips text at the bottom (its internal
+        # padding eats into the cell's exact pixel height), so give it enough
+        # extra room to fit its own natural size and re-center it on the row
+        # instead of just growing downward.
+        widget.update_idletasks()
+        pad = max(8, widget.winfo_reqheight() - height + 2)
+        widget.place(x=x, y=y - pad // 2, width=width, height=height + pad)
         widget.focus_set()
         widget.select_range(0, "end")
         widget.bind("<Return>", lambda _e: self._commit_inline_edit())
@@ -593,7 +608,27 @@ class StartupLauncherApp:
         widget.bind("<Escape>", lambda _e: self._cancel_inline_edit())
         widget.bind("<FocusOut>", lambda _e: self._commit_inline_edit())
 
-        self._active_edit = {"widget": widget, "index": index, "field": field}
+        # Keep a Python reference to `var` for as long as the widget lives: a
+        # tk.StringVar with no remaining Python references gets garbage-collected,
+        # which unsets its underlying Tcl variable and blanks the Entry/Spinbox -
+        # exactly the "no previous text shown" bug this fixes.
+        self._active_edit = {"widget": widget, "var": var, "index": index, "field": field}
+        # The click that opened this editor also reaches _on_global_click (via
+        # bind_all) right after; without this it would immediately close what
+        # it just opened.
+        self._suppress_next_global_close = True
+
+    def _on_global_click(self, event):
+        clicked = event.widget
+        self.root.after_idle(lambda: self._maybe_close_inline_edit(clicked))
+
+    def _maybe_close_inline_edit(self, clicked_widget):
+        if self._suppress_next_global_close:
+            self._suppress_next_global_close = False
+            return
+        if self._active_edit is None or clicked_widget is self._active_edit["widget"]:
+            return
+        self._commit_inline_edit()
 
     def _cancel_inline_edit(self):
         if self._active_edit is None:
