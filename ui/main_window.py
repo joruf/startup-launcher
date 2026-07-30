@@ -137,7 +137,6 @@ class StartupLauncherApp:
         self.tree.configure(yscrollcommand=self._on_tree_scroll)
         self._tree_scrollbar.pack(side="right", fill="y")
 
-        self.tree.bind("<Double-1>", self._on_double_click)
         self.tree.bind("<Button-1>", self._on_tree_click)
         self.tree.bind("<Button-3>", self._on_tree_context_menu)
         self.tree.bind("<Configure>", lambda _e: self._position_overlays())
@@ -831,9 +830,6 @@ class StartupLauncherApp:
         entry = self.entries[index]
         self._log(f"Starting '{entry['name']}' ...")
         launcher.launch_entry(entry, log=self._log)
-
-    def _on_double_click(self, _event):
-        self._start_selected()
 
     def _start_all(self):
         self._log("Starting all enabled entries ...")
