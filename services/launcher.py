@@ -16,6 +16,11 @@ WAIT_TIMEOUT_SECONDS = 20
 POLL_INTERVAL_SECONDS = 0.5
 
 
+def _flatten_command(command):
+    """Collapse a (possibly multi-line) command into a single shell-argv line."""
+    return " ".join(line.strip() for line in command.splitlines() if line.strip())
+
+
 def _apply_window_state(entry, log):
     """Poll for the launched window and apply its configured wmctrl state."""
     mode = entry["window_mode"]
@@ -59,7 +64,7 @@ def launch_entry(entry, log=None, geometry_restore=None):
     log = log or (lambda message: None)
 
     try:
-        args = shlex.split(entry["command"])
+        args = shlex.split(_flatten_command(entry["command"]))
     except ValueError as exc:
         log(f"{entry['name']}: could not parse command ({exc}).")
         return
@@ -83,7 +88,22 @@ def launch_entry(entry, log=None, geometry_restore=None):
 
 
 def launch_entries(entries, log=None, geometry_restore=None):
-    """Launch every enabled entry in the given list (non-blocking, like the old script)."""
+    """
+    Launch every enabled entry in the given list (non-blocking, like the old script).
+
+    Entries with a delay_seconds > 0 are launched after that many seconds instead of
+    immediately, so a startup sequence can stagger heavy programs.
+    """
     for entry in entries:
-        if entry.get("enabled", True):
+        if not entry.get("enabled", True):
+            continue
+
+        delay = entry.get("delay_seconds", 0)
+        if delay > 0:
+            timer = threading.Timer(
+                delay, launch_entry, kwargs={"entry": entry, "log": log, "geometry_restore": geometry_restore}
+            )
+            timer.daemon = True
+            timer.start()
+        else:
             launch_entry(entry, log=log, geometry_restore=geometry_restore)

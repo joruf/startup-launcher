@@ -8,7 +8,7 @@ from config import autostart
 from config import settings as settings_store
 from models import entries as entry_model
 from models import geometry as geometry_model
-from paths import ICON_FILE
+from paths import ENTRIES_FILE, ICON_FILE
 from services import geometry as geometry_service
 from services import launcher
 from ui.entry_dialog import EntryDialog
@@ -16,79 +16,103 @@ from ui.settings_dialog import SettingsDialog
 from ui.style import MUTED_FG, PANEL_BG, SELECTION_COLOR, TEXT_FG, configure_ui_style
 from ui.tooltip import Tooltip
 from ui.tray import TrayIcon
+from ui.wrap_bar import WrapButtonBar
 from ui.window_icon import apply_window_icon
 
 CHECKED = "☑"  # ☑
 UNCHECKED = "☐"  # ☐
 PARTIAL = "☒"  # ☒ (some, but not all, group members enabled)
 
-# ttk.Treeview only lets #0 show a per-item image; the "enabled" data column
-# can't render anything bigger than the rest of the row's text. So the checkbox
-# is drawn with a real Label placed on top of that cell instead - this is the
-# only way to make just the checkbox bigger while every other column keeps its
-# normal size.
+# ttk.Treeview only lets #0 show a per-item image; a data column can't render
+# anything bigger than the rest of the row's text. So the checkbox is drawn with
+# a real Label placed on top of that cell instead - the only way to make just
+# the checkbox bigger while every other column keeps its normal size.
 CHECKBOX_FONT = ("TkDefaultFont", 15)
 
+ENTRIES_POLL_INTERVAL_MS = 2000
 
-def _format_position(saved):
-    """Return a compact "x,y  WxH" label for a saved geometry, or "" if unknown."""
-    if not saved:
-        return ""
-    return f"{saved['x']},{saved['y']}  {saved['width']}×{saved['height']}"
+# Columns after the tree's own #0 (Name) column.
+COLUMNS = ("enabled", "mode", "delay", "command", "xy", "size")
+COLUMN_LABELS = {
+    "#0": "Name",
+    "enabled": "Enabled",
+    "mode": "Window Mode",
+    "delay": "Delay (s)",
+    "command": "Command",
+    "xy": "XY",
+    "size": "Size",
+}
+# Treeview column ids ("#0", "#1", ...) that support single-click inline editing,
+# mapped to the entry/geometry field they edit. "enabled" (checkbox) and "mode"
+# (fixed set of options, edited via the New/Edit dialog) are deliberately excluded.
+EDITABLE_FIELD_BY_TREECOL = {
+    "#0": "name",
+    "#3": "delay",
+    "#4": "command",
+    "#5": "xy",
+    "#6": "size",
+}
+
+
+def _format_xy(saved):
+    return f"{saved['x']},{saved['y']}" if saved else ""
+
+
+def _format_size(saved):
+    return f"{saved['width']}x{saved['height']}" if saved else ""
+
+
+def _flatten_command(command):
+    """Collapse a (possibly multi-line) command into a single line for quick display/edit."""
+    return " ".join(line.strip() for line in command.splitlines() if line.strip())
 
 
 class StartupLauncherApp:
     """Main application window."""
 
-    COLUMNS = ("enabled", "mode", "command", "position")
-
     def __init__(self, root, auto_run=False):
         self.root = root
         self.entries = entry_model.load_entries()
+        self._entries_mtime = self._current_entries_mtime()
+        self._last_shutdown_was_clean = settings_store.mark_session_started()
         self._exiting = False
         self._tray_icon = None
         self._auto_run = auto_run
         self._scan_job_id = None
         self._checkbox_labels = {}
+        self._active_edit = None
+        self._sort_column = None
+        self._sort_reverse = False
+        self._button_bar_rows = 1
+        self._layout_ready = False
 
         configure_ui_style(root)
         apply_window_icon(root)
 
+        self.autostart_var = tk.BooleanVar(value=autostart.is_enabled())
+
         root.title("Startup Launcher")
-        root.geometry("900x480")
+        root.geometry("1100x560")
         root.withdraw()
 
         self._build_menu()
-
-        top_bar = ttk.Frame(root, padding=(10, 8))
-        top_bar.pack(fill="x")
-
-        self.autostart_var = tk.BooleanVar(value=autostart.is_enabled())
-        autostart_check = ttk.Checkbutton(
-            top_bar,
-            text="Run automatically at system startup",
-            variable=self.autostart_var,
-            command=self._toggle_autostart,
-        )
-        autostart_check.pack(side="left")
-        Tooltip(autostart_check, "Launch this app at login and start all enabled entries automatically.")
+        self._build_button_bar(root)
 
         tree_frame = ttk.Frame(root, padding=(10, 0))
         tree_frame.pack(fill="both", expand=True)
 
         self.tree = ttk.Treeview(
-            tree_frame, columns=self.COLUMNS, show="tree headings", selectmode="browse"
+            tree_frame, columns=COLUMNS, show="tree headings", selectmode="browse"
         )
-        self.tree.heading("#0", text="Name")
-        self.tree.heading("enabled", text="Enabled")
-        self.tree.heading("mode", text="Window Mode")
-        self.tree.heading("command", text="Command")
-        self.tree.heading("position", text="Position")
-        self.tree.column("#0", width=240)
+        for col in ("#0",) + COLUMNS:
+            self.tree.heading(col, text=COLUMN_LABELS[col], command=lambda c=col: self._sort_by(c))
+        self.tree.column("#0", width=220)
         self.tree.column("enabled", width=70, anchor="center")
-        self.tree.column("mode", width=100, anchor="center")
-        self.tree.column("command", width=340)
-        self.tree.column("position", width=130, anchor="center")
+        self.tree.column("mode", width=110, anchor="w")
+        self.tree.column("delay", width=70, anchor="center")
+        self.tree.column("command", width=300)
+        self.tree.column("xy", width=100, anchor="w")
+        self.tree.column("size", width=110, anchor="w")
         self.tree.pack(side="left", fill="both", expand=True)
 
         self._tree_scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
@@ -96,51 +120,12 @@ class StartupLauncherApp:
         self._tree_scrollbar.pack(side="right", fill="y")
 
         self.tree.bind("<Double-1>", self._on_double_click)
+        self.tree.bind("<Button-1>", self._on_tree_click)
         self.tree.bind("<Button-3>", self._on_tree_context_menu)
         self.tree.bind("<Configure>", lambda _e: self._position_checkbox_overlays())
         self.tree.bind("<<TreeviewOpen>>", lambda _e: self.root.after_idle(self._position_checkbox_overlays))
         self.tree.bind("<<TreeviewClose>>", lambda _e: self.root.after_idle(self._position_checkbox_overlays))
         self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
-
-        button_bar = ttk.Frame(root, padding=10)
-        button_bar.pack(fill="x")
-
-        def add_button(text, command, style=None, tooltip=None, side="left"):
-            button = ttk.Button(button_bar, text=text, command=command, style=style)
-            button.pack(side=side, padx=2)
-            if tooltip:
-                Tooltip(button, tooltip)
-            return button
-
-        add_button("New", self._add_entry, tooltip="Add a new entry.")
-        self.btn_edit = add_button("Edit", self._edit_selected, tooltip="Edit the selected entry.")
-        self.btn_delete = add_button(
-            "Delete", self._delete_selected, tooltip="Delete the selected entry or group."
-        )
-        self.btn_move_up = add_button(
-            "Move Up", lambda: self._move_selected(-1), tooltip="Move the selected entry up."
-        )
-        self.btn_move_down = add_button(
-            "Move Down", lambda: self._move_selected(1), tooltip="Move the selected entry down."
-        )
-        self.btn_restart = add_button(
-            "Restart",
-            self._start_selected,
-            style="Primary.TButton",
-            tooltip="Run the selected entry or group again, regardless of its Enabled state.",
-        )
-        self.btn_restore = add_button(
-            "Restore Position",
-            self._restore_selected,
-            tooltip="Move the selected entry's (or group's) open window back to its last saved position/size.",
-        )
-        add_button(
-            "Start All",
-            self._start_all,
-            style="Primary.TButton",
-            tooltip="Launch every enabled entry, like at login.",
-            side="right",
-        )
 
         status_frame = ttk.Frame(root, padding=(10, 0, 10, 10))
         status_frame.pack(fill="both")
@@ -153,25 +138,82 @@ class StartupLauncherApp:
 
         root.protocol("WM_DELETE_WINDOW", self._hide_to_tray)
         root.after_idle(self._start_tray_icon)
+        root.after_idle(lambda: setattr(self, "_layout_ready", True))
         self._schedule_periodic_scan()
+        self.root.after(ENTRIES_POLL_INTERVAL_MS, self._check_entries_file_changed)
 
         if auto_run:
             root.after(300, self._start_all)
 
+    # -- layout -----------------------------------------------------------
+
+    def _build_button_bar(self, root):
+        self._button_bar_base_height = None
+        self.button_bar = WrapButtonBar(root, on_rows_changed=self._on_button_rows_changed, padding=(10, 8))
+        self.button_bar.pack(fill="x")
+
+        self.button_bar.add("New", self._add_entry, tooltip="Add a new entry.")
+        self.btn_edit = self.button_bar.add("Edit", self._edit_selected, tooltip="Edit the selected entry.")
+        self.btn_delete = self.button_bar.add(
+            "Delete", self._delete_selected, tooltip="Delete the selected entry or group."
+        )
+        self.btn_move_up = self.button_bar.add(
+            "Move Up", lambda: self._move_selected(-1), tooltip="Move the selected entry up."
+        )
+        self.btn_move_down = self.button_bar.add(
+            "Move Down", lambda: self._move_selected(1), tooltip="Move the selected entry down."
+        )
+        self.btn_restart = self.button_bar.add(
+            "Restart",
+            self._start_selected,
+            style="Primary.TButton",
+            tooltip="Run the selected entry or group again, regardless of its Enabled state.",
+        )
+        self.btn_restore = self.button_bar.add(
+            "Restore Position",
+            self._restore_selected,
+            tooltip="Move the selected entry's (or group's) open window back to its last saved position/size.",
+        )
+        self.button_bar.add(
+            "Start All",
+            self._start_all,
+            style="Primary.TButton",
+            tooltip="Launch every enabled entry, like at login.",
+        )
+
+    def _on_button_rows_changed(self, rows):
+        # Ignore row-count changes while the window is still being built - only react
+        # to real wraps caused by the user later resizing the window narrower.
+        if not self._layout_ready or rows <= self._button_bar_rows:
+            self._button_bar_rows = max(self._button_bar_rows, rows)
+            return
+
+        extra_rows = rows - self._button_bar_rows
+        self._button_bar_rows = rows
+        row_height = self.button_bar.row_height + 4  # matches WrapButtonBar's own row spacing
+        width = self.root.winfo_width() or 1100
+        height = self.root.winfo_height() or 560
+        self.root.geometry(f"{width}x{height + extra_rows * row_height}")
+
     # -- window / tray -------------------------------------------------
 
     def _build_menu(self):
-        menubar = tk.Menu(self.root)
+        menubar = tk.Menu(self.root, tearoff=False)
 
         file_menu = tk.Menu(menubar, tearoff=False)
+        file_menu.add_checkbutton(
+            label="Run Automatically at Startup", variable=self.autostart_var, command=self._toggle_autostart
+        )
+        file_menu.add_separator()
         file_menu.add_command(label="Minimize to Tray", command=self._hide_to_tray)
         file_menu.add_command(label="Quit", command=self._quit_application)
         menubar.add_cascade(label="File", menu=file_menu)
         self._bind_menu_hints(
             file_menu,
             {
-                0: "Hide the window - the app keeps running in the tray.",
-                1: "Close the app completely.",
+                0: "Launch this app at login and start all enabled entries automatically.",
+                2: "Hide the window - the app keeps running in the tray.",
+                3: "Close the app completely.",
             },
         )
 
@@ -235,6 +277,8 @@ class StartupLauncherApp:
             tooltip="Startup Launcher",
             on_show=lambda: self.root.after(0, self._show_from_tray),
             on_exit=lambda: self.root.after(0, self._quit_application),
+            autostart_getter=lambda: self.autostart_var.get(),
+            on_toggle_autostart=lambda enabled: self.root.after(0, lambda: self._set_autostart_from_tray(enabled)),
         )
         if tray.start():
             self._tray_icon = tray
@@ -257,6 +301,9 @@ class StartupLauncherApp:
         if self._exiting:
             return
         self._exiting = True
+        self._log("Saving window positions before exit ...")
+        geometry_service.scan_and_store(self.entries, log=self._log)
+        settings_store.mark_clean_shutdown()
         self.root.destroy()
 
     # -- helpers ---------------------------------------------------------
@@ -264,11 +311,28 @@ class StartupLauncherApp:
     def _log(self, message):
         self.status_var.set(message)
 
+    def _current_entries_mtime(self):
+        try:
+            return ENTRIES_FILE.stat().st_mtime
+        except OSError:
+            return None
+
+    def _check_entries_file_changed(self):
+        mtime = self._current_entries_mtime()
+        if mtime != self._entries_mtime:
+            self._entries_mtime = mtime
+            self.entries = entry_model.load_entries()
+            self._refresh_tree()
+            self._log("entries.json changed on disk - table reloaded.")
+        self.root.after(ENTRIES_POLL_INTERVAL_MS, self._check_entries_file_changed)
+
     def _refresh_tree(self):
+        self._cancel_inline_edit()
         selected = self.tree.selection()
         self.tree.delete(*self.tree.get_children())
         saved_geometry = geometry_model.load_geometry()
         group_ids = {}
+        empty_values = ("",) * len(COLUMNS)
         for index, entry in enumerate(self.entries):
             group = entry.get("group", "").strip()
             parent = ""
@@ -276,9 +340,10 @@ class StartupLauncherApp:
                 parent = group_ids.get(group)
                 if parent is None:
                     parent = f"g:{group}"
-                    self.tree.insert("", "end", iid=parent, text=group, open=True, values=("", "", "", ""))
+                    self.tree.insert("", "end", iid=parent, text=group, open=True, values=empty_values)
                     group_ids[group] = parent
 
+            geometry = saved_geometry.get(entry["id"])
             self.tree.insert(
                 parent,
                 "end",
@@ -287,8 +352,10 @@ class StartupLauncherApp:
                 values=(
                     CHECKED if entry.get("enabled", True) else UNCHECKED,
                     entry_model.WINDOW_MODE_LABELS[entry["window_mode"]],
-                    entry["command"],
-                    _format_position(saved_geometry.get(entry["id"])),
+                    str(entry.get("delay_seconds", 0)),
+                    _flatten_command(entry["command"]),
+                    _format_xy(geometry),
+                    _format_size(geometry),
                 ),
             )
 
@@ -323,6 +390,46 @@ class StartupLauncherApp:
 
     def _save(self):
         entry_model.save_entries(self.entries)
+        self._entries_mtime = self._current_entries_mtime()
+
+    # -- sorting ------------------------------------------------------------
+
+    def _sort_by(self, column):
+        self._cancel_inline_edit()
+        reverse = self._sort_column == column and not self._sort_reverse
+        self._sort_column = column
+        self._sort_reverse = reverse
+
+        geometry = geometry_model.load_geometry()
+        self.entries.sort(key=lambda e: self._sort_key(e, column, geometry), reverse=reverse)
+        self._save()
+        self._update_sort_indicators()
+        self._refresh_tree()
+
+    def _sort_key(self, entry, column, geometry):
+        if column == "#0":
+            return entry["name"].lower()
+        if column == "enabled":
+            return bool(entry.get("enabled", True))
+        if column == "mode":
+            return entry_model.WINDOW_MODE_LABELS[entry["window_mode"]].lower()
+        if column == "delay":
+            return entry.get("delay_seconds", 0)
+        if column == "command":
+            return entry["command"].lower()
+        if column in ("xy", "size"):
+            saved = geometry.get(entry["id"])
+            if not saved:
+                return (float("inf"), float("inf"))
+            return (saved["x"], saved["y"]) if column == "xy" else (saved["width"], saved["height"])
+        return ""
+
+    def _update_sort_indicators(self):
+        for col, label in COLUMN_LABELS.items():
+            text = label
+            if col == self._sort_column:
+                text += " ▼" if self._sort_reverse else " ▲"
+            self.tree.heading(col, text=text)
 
     # -- row selection / context menu --------------------------------------
 
@@ -358,6 +465,7 @@ class StartupLauncherApp:
         if not iid:
             return
 
+        self._cancel_inline_edit()
         self.tree.selection_set(iid)
         self.tree.focus(iid)
         self._update_action_buttons()
@@ -414,6 +522,7 @@ class StartupLauncherApp:
             self._checkbox_labels[iid] = label
 
     def _on_checkbox_click(self, iid):
+        self._cancel_inline_edit()
         self.tree.selection_set(iid)
         if self._is_group(iid):
             self._toggle_group(iid[2:])
@@ -435,6 +544,117 @@ class StartupLauncherApp:
             entry["enabled"] = new_state
         self._save()
         self._refresh_tree()
+
+    # -- inline cell editing -------------------------------------------------
+
+    def _on_tree_click(self, event):
+        if self.tree.identify_region(event.x, event.y) not in ("cell", "tree"):
+            return
+        treecol = self.tree.identify_column(event.x)
+        field = EDITABLE_FIELD_BY_TREECOL.get(treecol)
+        if field is None:
+            return
+        iid = self.tree.identify_row(event.y)
+        if not iid or self._is_group(iid):
+            return
+        self._begin_inline_edit(iid, treecol, field)
+
+    def _begin_inline_edit(self, iid, treecol, field):
+        self._cancel_inline_edit()
+
+        bbox = self.tree.bbox(iid) if treecol == "#0" else self.tree.bbox(iid, column=treecol)
+        if not bbox:
+            return
+        x, y, width, height = bbox
+        index = self._entry_index(iid)
+        entry = self.entries[index]
+
+        if field == "name":
+            current_text = entry["name"]
+        elif field == "command":
+            current_text = _flatten_command(entry["command"])
+        elif field == "delay":
+            current_text = str(entry.get("delay_seconds", 0))
+        else:
+            saved = geometry_model.load_geometry().get(entry["id"])
+            current_text = _format_xy(saved) if field == "xy" else _format_size(saved)
+
+        var = tk.StringVar(value=current_text)
+        if field == "delay":
+            widget = ttk.Spinbox(self.tree, from_=0, to=60, textvariable=var, width=5)
+        else:
+            widget = ttk.Entry(self.tree, textvariable=var)
+
+        widget.place(x=x, y=y, width=width, height=height)
+        widget.focus_set()
+        widget.select_range(0, "end")
+        widget.bind("<Return>", lambda _e: self._commit_inline_edit())
+        widget.bind("<KP_Enter>", lambda _e: self._commit_inline_edit())
+        widget.bind("<Escape>", lambda _e: self._cancel_inline_edit())
+        widget.bind("<FocusOut>", lambda _e: self._commit_inline_edit())
+
+        self._active_edit = {"widget": widget, "index": index, "field": field}
+
+    def _cancel_inline_edit(self):
+        if self._active_edit is None:
+            return
+        edit = self._active_edit
+        self._active_edit = None
+        edit["widget"].destroy()
+
+    def _commit_inline_edit(self):
+        if self._active_edit is None:
+            return
+        edit = self._active_edit
+        self._active_edit = None
+        widget = edit["widget"]
+        value = widget.get().strip()
+        widget.destroy()
+
+        entry = self.entries[edit["index"]]
+        field = edit["field"]
+
+        if field == "name":
+            if value:
+                entry["name"] = value
+                self._save()
+        elif field == "command":
+            if value:
+                entry["command"] = value
+                self._save()
+        elif field == "delay":
+            try:
+                entry["delay_seconds"] = entry_model.clamp_delay_seconds(int(value))
+            except ValueError:
+                pass
+            else:
+                self._save()
+        elif field in ("xy", "size"):
+            self._commit_position_field(entry, field, value)
+
+        self._refresh_tree()
+
+    def _commit_position_field(self, entry, field, value):
+        if not value:
+            return
+        geometry = geometry_model.load_geometry()
+        current = dict(geometry.get(entry["id"], {"x": 0, "y": 0, "width": 800, "height": 600}))
+        try:
+            if field == "xy":
+                x_str, y_str = value.split(",")
+                current["x"] = int(x_str.strip())
+                current["y"] = int(y_str.strip())
+            else:
+                w_str, h_str = value.lower().replace("×", "x").split("x")
+                current["width"] = int(w_str.strip())
+                current["height"] = int(h_str.strip())
+        except (ValueError, AttributeError):
+            expected = "x,y (e.g. 100,50)" if field == "xy" else "widthxheight (e.g. 1920x1080)"
+            self._log(f"Invalid format for {field.upper()} - expected {expected}.")
+            return
+
+        geometry[entry["id"]] = current
+        geometry_model.save_geometry(geometry)
 
     # -- entry actions -----------------------------------------------------
 
@@ -537,7 +757,8 @@ class StartupLauncherApp:
     def _start_all(self):
         self._log("Starting all enabled entries ...")
         restore_fn = None
-        if self._auto_run and settings_store.load_settings().get("restore_on_startup", False):
+        settings = settings_store.load_settings()
+        if self._auto_run and self._last_shutdown_was_clean and settings.get("restore_on_startup", False):
             restore_fn = geometry_service.wait_and_restore_geometry
         launcher.launch_entries(self.entries, log=self._log, geometry_restore=restore_fn)
 
@@ -548,6 +769,10 @@ class StartupLauncherApp:
         else:
             autostart.disable()
             self._log("Autostart disabled.")
+
+    def _set_autostart_from_tray(self, enabled):
+        self.autostart_var.set(enabled)
+        self._toggle_autostart()
 
     # -- window positions ----------------------------------------------
 
@@ -576,7 +801,9 @@ class StartupLauncherApp:
         dialog = SettingsDialog(self.root)
         self.root.wait_window(dialog)
         if dialog.result:
-            settings_store.save_settings(dialog.result)
+            current = settings_store.load_settings()
+            current.update(dialog.result)
+            settings_store.save_settings(current)
             self._log("Settings saved.")
             self._schedule_periodic_scan(reset=True)
 

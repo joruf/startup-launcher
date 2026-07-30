@@ -1,8 +1,8 @@
 """Entry schema, default seed data, and JSON persistence for launch entries."""
 
-import json
 import uuid
 
+from json_store import load_json, save_json_atomic
 from paths import ENTRIES_FILE, EXAMPLE_ENTRIES_FILE
 
 WINDOW_MODES = ["normal", "minimized", "maximized", "fullscreen"]
@@ -20,6 +20,9 @@ MATCH_MODE_LABELS = {
     "title": "Window Title",
 }
 
+MIN_DELAY_SECONDS = 0
+MAX_DELAY_SECONDS = 60
+
 
 def default_entries():
     """
@@ -30,10 +33,7 @@ def default_entries():
     commands/paths here, since this file is committed to source control while
     entries.json itself is git-ignored.
     """
-    if EXAMPLE_ENTRIES_FILE.is_file():
-        with EXAMPLE_ENTRIES_FILE.open(encoding="utf-8") as handle:
-            return json.load(handle)
-    return []
+    return load_json(EXAMPLE_ENTRIES_FILE, [])
 
 
 def new_id():
@@ -41,37 +41,41 @@ def new_id():
     return uuid.uuid4().hex
 
 
-def _ensure_ids(entries):
-    """Backfill a stable id on any entry that doesn't have one yet."""
+def _ensure_schema(entries):
+    """Backfill a stable id and a default delay_seconds on any entry missing them."""
     changed = False
     for entry in entries:
         if not entry.get("id"):
             entry["id"] = new_id()
             changed = True
+        if "delay_seconds" not in entry:
+            entry["delay_seconds"] = 0
+            changed = True
     return changed
 
 
+def clamp_delay_seconds(value):
+    """Clamp a delay value to the supported 0-60 second range."""
+    return max(MIN_DELAY_SECONDS, min(MAX_DELAY_SECONDS, value))
+
+
 def load_entries():
-    """Load entries from entries.json, seeding it with defaults on first run."""
-    if not ENTRIES_FILE.is_file():
+    """Load entries from entries.json, seeding it with defaults if missing or corrupted."""
+    entries = load_json(ENTRIES_FILE, None)
+    if entries is None:
         entries = default_entries()
-        _ensure_ids(entries)
+        _ensure_schema(entries)
         save_entries(entries)
         return entries
 
-    with ENTRIES_FILE.open(encoding="utf-8") as handle:
-        entries = json.load(handle)
-
-    if _ensure_ids(entries):
+    if _ensure_schema(entries):
         save_entries(entries)
     return entries
 
 
 def save_entries(entries):
     """Persist entries to entries.json."""
-    with ENTRIES_FILE.open("w", encoding="utf-8") as handle:
-        json.dump(entries, handle, indent=2, ensure_ascii=False)
-        handle.write("\n")
+    save_json_atomic(ENTRIES_FILE, entries)
 
 
 def existing_groups(entries):

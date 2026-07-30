@@ -6,8 +6,11 @@ from tkinter import messagebox, ttk
 from models.entries import (
     MATCH_MODE_LABELS,
     MATCH_MODES,
+    MAX_DELAY_SECONDS,
+    MIN_DELAY_SECONDS,
     WINDOW_MODE_LABELS,
     WINDOW_MODES,
+    clamp_delay_seconds,
 )
 from ui.style import BORDER_COLOR, FOCUS_COLOR, PANEL_BG, TEXT_FG
 from ui.window_icon import apply_window_icon
@@ -86,7 +89,16 @@ class EntryDialog(tk.Toplevel):
         )
         mode_box.grid(row=4, column=1, sticky="w")
 
-        ttk.Label(form, text="Window Match:").grid(row=5, column=0, sticky="w", pady=4)
+        ttk.Label(form, text="Delay (seconds):").grid(row=5, column=0, sticky="w", pady=4)
+        self.delay_var = tk.StringVar(value=str(entry.get("delay_seconds", 0)))
+        ttk.Spinbox(
+            form, from_=MIN_DELAY_SECONDS, to=MAX_DELAY_SECONDS, textvariable=self.delay_var, width=6
+        ).grid(row=5, column=1, sticky="w")
+        ttk.Label(form, text="How long to wait after app start before launching this entry.").grid(
+            row=5, column=2, sticky="w", padx=(6, 0)
+        )
+
+        ttk.Label(form, text="Window Match:").grid(row=6, column=0, sticky="w", pady=4)
         self.match_mode_var = tk.StringVar(value=MATCH_MODE_LABELS[entry.get("match_mode", "class")])
         self.match_mode_box = ttk.Combobox(
             form,
@@ -95,21 +107,21 @@ class EntryDialog(tk.Toplevel):
             state="readonly",
             width=26,
         )
-        self.match_mode_box.grid(row=5, column=1, sticky="w")
+        self.match_mode_box.grid(row=6, column=1, sticky="w")
 
-        ttk.Label(form, text="Search Term:").grid(row=6, column=0, sticky="w", pady=4)
+        ttk.Label(form, text="Search Term:").grid(row=7, column=0, sticky="w", pady=4)
         self.match_string_var = tk.StringVar(value=entry.get("match_string", ""))
         self.match_string_entry = ttk.Entry(form, textvariable=self.match_string_var, width=30)
-        self.match_string_entry.grid(row=6, column=1, columnspan=2, sticky="we")
+        self.match_string_entry.grid(row=7, column=1, columnspan=2, sticky="we")
         ttk.Label(
             form,
             text="Required for Minimized/Maximized/Fullscreen. Optional for Normal - set it anyway"
             " if you want Scan/Restore Position to track this window.",
             foreground="#71717a",
-        ).grid(row=7, column=1, columnspan=2, sticky="w")
+        ).grid(row=8, column=1, columnspan=2, sticky="w")
 
         button_row = ttk.Frame(form)
-        button_row.grid(row=8, column=0, columnspan=3, sticky="e", pady=(12, 0))
+        button_row.grid(row=9, column=0, columnspan=3, sticky="e", pady=(12, 0))
         ttk.Button(button_row, text="Cancel", command=self.destroy).grid(row=0, column=0, padx=4)
         ttk.Button(
             button_row, text="Save", style="Primary.TButton", command=self._save
@@ -119,15 +131,20 @@ class EntryDialog(tk.Toplevel):
 
     def _save(self):
         name = self.name_var.get().strip()
-        command = " ".join(
-            line.strip() for line in self.command_text.get("1.0", "end").splitlines() if line.strip()
-        )
+        # Keep the raw multi-line text as typed (for readability on the next edit) -
+        # it's only flattened to a single shell line at actual launch time.
+        command = self.command_text.get("1.0", "end").strip()
         group = self.group_var.get().strip()
         window_mode = next(key for key, label in WINDOW_MODE_LABELS.items() if label == self.mode_var.get())
         match_mode = next(
             key for key, label in MATCH_MODE_LABELS.items() if label == self.match_mode_var.get()
         )
         match_string = self.match_string_var.get().strip()
+
+        try:
+            delay_seconds = clamp_delay_seconds(int(self.delay_var.get()))
+        except ValueError:
+            delay_seconds = 0
 
         if not name:
             messagebox.showerror("Missing Value", "Please enter a name.", parent=self)
@@ -151,6 +168,7 @@ class EntryDialog(tk.Toplevel):
             "window_mode": window_mode,
             "match_mode": match_mode,
             "match_string": match_string,
+            "delay_seconds": delay_seconds,
             "enabled": self._enabled,
         }
         self.destroy()

@@ -14,12 +14,17 @@ class TrayIcon:
         tooltip: str,
         on_show: Callable[[], None],
         on_exit: Callable[[], None],
+        autostart_getter: Optional[Callable[[], bool]] = None,
+        on_toggle_autostart: Optional[Callable[[bool], None]] = None,
     ) -> None:
         self._icon_path = icon_path
         self._tooltip = tooltip
         self._on_show = on_show
         self._on_exit = on_exit
+        self._autostart_getter = autostart_getter
+        self._on_toggle_autostart = on_toggle_autostart
         self._thread: Optional[threading.Thread] = None
+        self._suppress_toggle_signal = False
 
     def start(self) -> bool:
         """
@@ -72,6 +77,17 @@ class TrayIcon:
         show_item.show()
         menu.append(show_item)
 
+        if self._autostart_getter is not None:
+            menu.append(Gtk.SeparatorMenuItem())
+
+            autostart_item = Gtk.CheckMenuItem(label="Run Automatically at Startup")
+            self._suppress_toggle_signal = True
+            autostart_item.set_active(self._autostart_getter())
+            self._suppress_toggle_signal = False
+            autostart_item.connect("toggled", self._handle_toggle_autostart)
+            autostart_item.show()
+            menu.append(autostart_item)
+
         menu.append(Gtk.SeparatorMenuItem())
 
         exit_item = Gtk.MenuItem(label="Quit")
@@ -81,6 +97,11 @@ class TrayIcon:
 
         menu.show()
         menu.popup(None, None, None, None, button, activate_time)
+
+    def _handle_toggle_autostart(self, item) -> None:
+        if self._suppress_toggle_signal or self._on_toggle_autostart is None:
+            return
+        self._on_toggle_autostart(item.get_active())
 
     def _handle_exit(self, *_args) -> None:
         self._on_exit()

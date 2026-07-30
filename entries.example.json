@@ -6,6 +6,7 @@
     "window_mode": "maximized",
     "match_mode": "class",
     "match_string": "Nemo",
+    "delay_seconds": 0,
     "enabled": true
   },
   {
@@ -15,6 +16,7 @@
     "window_mode": "maximized",
     "match_mode": "title",
     "match_string": "project-a",
+    "delay_seconds": 2,
     "enabled": true
   },
   {
@@ -24,6 +26,7 @@
     "window_mode": "maximized",
     "match_mode": "title",
     "match_string": "project-b",
+    "delay_seconds": 2,
     "enabled": false
   },
   {
@@ -33,6 +36,7 @@
     "window_mode": "maximized",
     "match_mode": "class",
     "match_string": "Firefox",
+    "delay_seconds": 0,
     "enabled": true
   },
   {
@@ -42,6 +46,7 @@
     "window_mode": "normal",
     "match_mode": "class",
     "match_string": "",
+    "delay_seconds": 5,
     "enabled": true
   }
 ]
