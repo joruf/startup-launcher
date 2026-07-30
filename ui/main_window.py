@@ -289,6 +289,11 @@ class StartupLauncherApp:
         )
         if tray.start():
             self._tray_icon = tray
+        elif self._auto_run:
+            # Started via autostart: stay tray-only no matter what, even without a
+            # tray icon to show for it - open the app manually later to fix GTK3
+            # or to reach the window.
+            self._log("System tray unavailable (GTK3 bindings missing). Staying hidden (autostart run).")
         else:
             self._log("System tray unavailable (GTK3 bindings missing). Window stays open.")
             self.root.deiconify()
