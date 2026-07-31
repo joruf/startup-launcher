@@ -1,9 +1,14 @@
 """Shared filesystem paths for Startup Launcher."""
 
+import os
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 RESOURCES_DIR = PROJECT_ROOT / "resources"
+
+STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
+RUNTIME_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", STATE_DIR))
+LOCK_DIR = RUNTIME_DIR / "startup-launcher"
 
 ENTRIES_FILE = PROJECT_ROOT / "entries.json"
 EXAMPLE_ENTRIES_FILE = PROJECT_ROOT / "entries.example.json"

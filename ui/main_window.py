@@ -11,6 +11,8 @@ from models import geometry as geometry_model
 from paths import ENTRIES_FILE, ICON_FILE
 from services import geometry as geometry_service
 from services import launcher
+from services.instance_ipc import InstanceControlServer
+from services.single_instance import enforce_single_instance
 from ui.entry_dialog import EntryDialog
 from ui.settings_dialog import SettingsDialog
 from ui.style import MUTED_FG, PANEL_BG, SELECTION_COLOR, TEXT_FG, configure_ui_style
@@ -89,12 +91,14 @@ class StartupLauncherApp:
         self._last_shutdown_was_clean = settings_store.mark_session_started()
         self._exiting = False
         self._tray_icon = None
+        self._control_server = None
+        self._instance_guard = None
         self._auto_run = auto_run
         self._scan_job_id = None
         self._checkbox_labels = {}
         self._launch_labels = {}
         self._active_edit = None
-        self._suppress_next_global_close = False
+        self._suppress_global_close_count = 0
         self._sort_column = None
         self._sort_reverse = False
         self._button_bar_rows = 1
@@ -137,7 +141,7 @@ class StartupLauncherApp:
         self.tree.configure(yscrollcommand=self._on_tree_scroll)
         self._tree_scrollbar.pack(side="right", fill="y")
 
-        self.tree.bind("<Button-1>", self._on_tree_click)
+        self.tree.bind("<Double-1>", self._on_tree_double_click)
         self.tree.bind("<Button-3>", self._on_tree_context_menu)
         self.tree.bind("<Configure>", lambda _e: self._position_overlays())
         self.tree.bind("<<TreeviewOpen>>", lambda _e: self.root.after_idle(self._position_overlays))
@@ -156,6 +160,7 @@ class StartupLauncherApp:
 
         root.protocol("WM_DELETE_WINDOW", self._hide_to_tray)
         root.after_idle(self._start_tray_icon)
+        root.after_idle(self._start_control_server)
         root.after_idle(lambda: setattr(self, "_layout_ready", True))
         self._schedule_periodic_scan()
         self.root.after(ENTRIES_POLL_INTERVAL_MS, self._check_entries_file_changed)
@@ -310,6 +315,10 @@ class StartupLauncherApp:
             self.root.deiconify()
             self.root.after_idle(self._position_overlays)
 
+    def _start_control_server(self):
+        self._control_server = InstanceControlServer(on_show=lambda: self.root.after(0, self._show_from_tray))
+        self._control_server.start()
+
     def _hide_to_tray(self):
         self.root.withdraw()
         self._log("Running in the system tray.")
@@ -327,6 +336,12 @@ class StartupLauncherApp:
         self._log("Saving window positions before exit ...")
         geometry_service.scan_and_store(self.entries, log=self._log)
         settings_store.mark_clean_shutdown()
+        if self._control_server is not None:
+            self._control_server.stop()
+            self._control_server = None
+        if self._instance_guard is not None:
+            self._instance_guard.release()
+            self._instance_guard = None
         self.root.destroy()
 
     # -- helpers ---------------------------------------------------------
@@ -599,7 +614,7 @@ class StartupLauncherApp:
 
     # -- inline cell editing -------------------------------------------------
 
-    def _on_tree_click(self, event):
+    def _on_tree_double_click(self, event):
         if self.tree.identify_region(event.x, event.y) not in ("cell", "tree"):
             return
         treecol = self.tree.identify_column(event.x)
@@ -658,18 +673,18 @@ class StartupLauncherApp:
         # which unsets its underlying Tcl variable and blanks the Entry/Spinbox -
         # exactly the "no previous text shown" bug this fixes.
         self._active_edit = {"widget": widget, "var": var, "index": index, "field": field}
-        # The click that opened this editor also reaches _on_global_click (via
-        # bind_all) right after; without this it would immediately close what
-        # it just opened.
-        self._suppress_next_global_close = True
+        # Opening the editor takes a double-click - both of its two raw Button-1
+        # presses also reach _on_global_click (via bind_all) right after; without
+        # this, one of them would immediately close what it just opened.
+        self._suppress_global_close_count = 2
 
     def _on_global_click(self, event):
         clicked = event.widget
         self.root.after_idle(lambda: self._maybe_close_inline_edit(clicked))
 
     def _maybe_close_inline_edit(self, clicked_widget):
-        if self._suppress_next_global_close:
-            self._suppress_next_global_close = False
+        if self._suppress_global_close_count > 0:
+            self._suppress_global_close_count -= 1
             return
         if self._active_edit is None or clicked_widget is self._active_edit["widget"]:
             return
@@ -903,7 +918,14 @@ class StartupLauncherApp:
 
 def main():
     auto_run = "--autostart" in sys.argv[1:]
+
+    may_continue, instance_guard = enforce_single_instance(quiet=auto_run)
+    if not may_continue:
+        return 1
+
     root = tk.Tk()
-    StartupLauncherApp(root, auto_run=auto_run)
+    app = StartupLauncherApp(root, auto_run=auto_run)
+    app._instance_guard = instance_guard
     root.mainloop()
+    instance_guard.release()
     return 0

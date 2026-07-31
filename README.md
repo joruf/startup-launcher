@@ -1,26 +1,57 @@
 # Startup Launcher
 
-GUI to manage the programs started at login - replaces a plain bash startup
-script with per-entry window placement, grouping, and position memory.
+A GUI to manage the programs started at login - replaces a plain bash startup
+script with per-entry window placement, grouping, delayed starts, and window
+position memory.
+
+📖 See **[MANUAL.md](MANUAL.md)** for the full user guide.
+
+## Features
+
+- Add/edit/delete/reorder login entries; group them (e.g. all VSCode
+  windows) and start a whole group with one click
+- Per-entry window mode (Normal, Minimized, Maximized, Fullscreen) applied
+  via `wmctrl`, plus a per-entry startup delay (0-60s) to stagger heavy
+  programs
+- Click-to-edit table: Name, Command, Delay, and window XY/Size can all be
+  edited directly in the table, no dialog needed
+- Window position memory: scan open windows, save their position/size, and
+  restore it per entry or group - with an opt-in "restore automatically at
+  login" that only kicks in after a clean shutdown
+- Enable/disable via checkboxes right in the table, with group-level cascade
+- Sortable columns, live-reload if `entries.json` changes on disk
+- Runs tray-only (GTK3), autostart toggle in the File/tray menu, and only
+  one instance can ever run at a time
+
+## Requirements
+
+- Linux with a window manager exposing `wmctrl` (Cinnamon/GNOME/XFCE/etc.)
+- `wmctrl` and `xprop` (window matching, scanning, and restoring positions)
+- Python 3.9+ with `tkinter` (`python3-tk` on Debian/Ubuntu/Mint)
+- GTK3 + PyGObject (`python3-gi`, `gir1.2-gtk-3.0`) for the system tray icon
+  - optional: without it, the app falls back to a normal visible window
+    when started manually (autostart launches always stay hidden either way)
 
 ## Usage
 
 ```bash
-python3 run.py
+git clone https://github.com/joruf/startup-launcher.git
+cd startup-launcher
+chmod +x run.py
+./run.py
 ```
 
-`entries.json`, `window_geometry.json`, and `settings.json` hold your personal
-data (your own commands/paths, window positions, preferences) and are
-git-ignored. On first run, if `entries.json` doesn't exist yet, copy the
-template to get started:
+`entries.json`, `window_geometry.json`, and `settings.json` hold your
+personal data (your own commands/paths, window positions, preferences) and
+are git-ignored - they're created automatically on first run, seeded from
+`entries.example.json` if present, or empty otherwise. To start from the
+bundled example entries instead of empty:
 
 ```bash
 cp entries.example.json entries.json
 ```
 
-(If you skip this, the app creates `entries.json` for you on first run,
-seeded from `entries.example.json` if present, or empty otherwise - see
-"Data lives in..." below.)
+## Entries & the Table
 
 - **New / Edit / Delete** — manage entries. Each entry has a command, a
   window mode (Normal, Minimized, Maximized, Fullscreen), a delay in seconds
@@ -33,9 +64,10 @@ seeded from `entries.example.json` if present, or empty otherwise - see
   paths/arguments (e.g. the Nemo entry) can be spread across multiple lines
   for readability. That formatting is kept as-is across edits; it's only
   flattened into a single shell line at the moment the command actually runs.
-- Click directly on **Name**, **Delay**, **Command**, **XY**, or **Size** in
-  the table to edit that cell in place (Enter/click away to save, Escape to
-  cancel) - no need to open "Edit..." for a quick tweak. XY takes `x,y` (e.g.
+- Double-click **Name**, **Delay**, **Command**, **XY**, or **Size** in the
+  table to edit that cell in place (Enter/click away to save, Escape to
+  cancel) - no need to open "Edit..." for a quick tweak. A single click just
+  selects the row, like anywhere else in the table. XY takes `x,y` (e.g.
   `100,50`); Size takes `widthxheight` (e.g. `1920x1080`) - editing either one
   here writes straight into `window_geometry.json`, the same store Scan/
   Restore Position use, so you can seed a position by hand without scanning
@@ -48,13 +80,10 @@ seeded from `entries.example.json` if present, or empty otherwise - see
   reflects and controls all of its members at once: checking/unchecking a
   group's box checks/unchecks every entry in that group. A group shows ☒
   when its members are mixed (some enabled, some not).
-- The **Launch** column's ▶ button opens the entry right from the table - or,
-  for a group row, every member of that group - the same action as the
-  toolbar's "Restart" button. This is the reliable way to launch from the
-  table now that most columns are click-to-edit: double-click still works
-  too, but only on cells that aren't inline-editable (Window Mode, or
-  anywhere on a group row), since a single click on the others opens the
-  editor instead.
+- The **Launch** column's ▶ button opens the entry right from the table (a
+  single click) - or, for a group row, every member of that group - the same
+  action as the toolbar's "Restart" button. This is the only way to launch
+  from the table; double-click is reserved for editing (see above).
 - **Group** — entries sharing the same group name (e.g. "VSCode") are shown
   nested under one node in the tree. Clicking ▶ (or "Restart") on the group
   node starts every entry in the group; clicking it on a single entry
@@ -122,7 +151,22 @@ the tray icon, or "Show Startup Launcher" in its context menu, opens the
 window; closing the window (X button, or File > "Minimize to Tray") just
 hides it again instead of quitting. Quitting goes through File > "Quit" or
 "Quit" in the tray menu. If GTK3 (`python3-gi` + `gir1.2-gtk-3.0`) isn't
-installed, the window stays visible as a fallback.
+installed, the window stays visible as a fallback for a manual launch - an
+autostart launch always stays hidden regardless.
+
+## Single Instance
+
+Only one Startup Launcher can run at a time - the same `fcntl.flock` +
+Unix-socket approach `devserver-commander` already uses
+(`services/single_instance.py`, `services/instance_ipc.py`). A second launch
+attempt (e.g. accidentally double-clicking the desktop icon while it's
+already running in the tray) doesn't open a duplicate: it asks the running
+instance to show itself (so a "hidden in the tray" instance actually becomes
+visible) and tells you it's already running, instead of proceeding. A second
+`--autostart` launch (e.g. autostart firing twice) is blocked the same way,
+just silently, with no dialog. The lock is an OS-level file lock tied to the
+process, so it's automatically released even if the app crashes or gets
+killed - never something you'd need to clean up by hand.
 
 ## Look & Feel
 
@@ -149,27 +193,29 @@ Modeled after `devserver-commander`:
 
 ```
 startup-launcher/
-├── run.py                  # thin entry point
-├── paths.py                # shared path constants
-├── json_store.py           # atomic writes + resilient reads for the JSON files below
-├── entries.json            # your data (git-ignored)
-├── entries.example.json    # generic template, committed - copy to entries.json
-├── window_geometry.json    # last-seen position/size per entry (git-ignored)
-├── settings.json           # scan/restore/clean-shutdown settings (git-ignored)
-├── models/entries.py       # schema, default seed, JSON persistence
-├── models/geometry.py      # window_geometry.json persistence
-├── services/launcher.py    # process start + wmctrl window state + per-entry delay
-├── services/geometry.py    # scan/restore window position via wmctrl
-├── config/autostart.py     # manage the autostart desktop entry
-├── config/settings.py      # settings.json persistence + clean-shutdown flag
-├── ui/main_window.py       # main window (StartupLauncherApp)
-├── ui/entry_dialog.py      # New/Edit dialog
-├── ui/settings_dialog.py    # Settings dialog
-├── ui/wrap_bar.py            # self-wrapping button bar
-├── ui/style.py              # ttk theme (copied from devserver-commander)
-├── ui/tray.py                # GTK3 system tray
-├── ui/window_icon.py         # window/taskbar icon
-└── resources/                # icon + .desktop template
+├── run.py                    # thin entry point
+├── paths.py                  # shared path constants
+├── json_store.py             # atomic writes + resilient reads for the JSON files below
+├── entries.json               # your data (git-ignored)
+├── entries.example.json       # generic template, committed - copy to entries.json
+├── window_geometry.json       # last-seen position/size per entry (git-ignored)
+├── settings.json              # scan/restore/clean-shutdown settings (git-ignored)
+├── models/entries.py          # schema, default seed, JSON persistence
+├── models/geometry.py         # window_geometry.json persistence
+├── services/launcher.py       # process start + wmctrl window state + per-entry delay
+├── services/geometry.py       # scan/restore window position via wmctrl
+├── services/single_instance.py # single-instance lock (fcntl.flock)
+├── services/instance_ipc.py   # Unix-socket "show yourself" IPC for the lock above
+├── config/autostart.py        # manage the autostart desktop entry
+├── config/settings.py         # settings.json persistence + clean-shutdown flag
+├── ui/main_window.py          # main window (StartupLauncherApp)
+├── ui/entry_dialog.py         # New/Edit dialog
+├── ui/settings_dialog.py      # Settings dialog
+├── ui/wrap_bar.py             # self-wrapping button bar
+├── ui/style.py                # ttk theme (copied from devserver-commander)
+├── ui/tray.py                 # GTK3 system tray
+├── ui/window_icon.py          # window/taskbar icon
+└── resources/                  # icon + .desktop template
 ```
 
 ## Note: old autostart icon
