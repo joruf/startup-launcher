@@ -1,7 +1,7 @@
 # Startup Launcher — Technische Dokumentation
 
 Architektur-Referenz für Entwickler. Für die reine Bedienung siehe das
-[Benutzerhandbuch](BENUTZERHANDBUCH.md), für Installation/Requirements/Quick-Start
+[Benutzerhandbuch](MANUAL.md) (Englisch), für Installation/Requirements/Quick-Start
 [README.md](README.md).
 
 ## 1. Architekturprinzip
@@ -285,4 +285,4 @@ X11-Display bereit, sodass exakt dieselben Tests laufen wie lokal.
 - **Kein Schutz gegen doppeltes Starten desselben Programms** — weder
   `launch_entry` noch die Tabelle prüfen, ob der Zielprozess schon läuft;
   zweimal auf ▶ klicken startet ihn zweimal (siehe
-  [Benutzerhandbuch](BENUTZERHANDBUCH.md#4-programme-starten)).
+  [Benutzerhandbuch](MANUAL.md#4-launching-programs)).

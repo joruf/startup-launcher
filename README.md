@@ -4,7 +4,7 @@ A GUI to manage the programs started at login - replaces a plain bash startup
 script with per-entry window placement, grouping, delayed starts, and window
 position memory.
 
-📖 **[Benutzerhandbuch](BENUTZERHANDBUCH.md)** (deutsch, Alltagsgebrauch) ·
+📖 **[User Manual](MANUAL.md)** (day-to-day usage) ·
 🛠️ **[Technische Dokumentation](TECHNISCHE-DOKUMENTATION.md)** (deutsch, Architektur)
 
 ## Screenshots
@@ -64,7 +64,7 @@ bundled example entries instead of empty:
 cp entries.example.json entries.json
 ```
 
-See the **[Benutzerhandbuch](BENUTZERHANDBUCH.md)** for the full day-to-day
+See the **[User Manual](MANUAL.md)** for the full day-to-day
 usage guide (table interactions, groups, delays, window position memory,
 autostart, single-instance behavior).
 
@@ -108,7 +108,7 @@ startup-launcher/
 ├── resources/                   # icon + .desktop template
 ├── docs/screenshots/            # README screenshots
 ├── tests/                       # unittest suite - see Testing below
-├── BENUTZERHANDBUCH.md          # user guide (deutsch)
+├── MANUAL.md                    # user guide
 └── TECHNISCHE-DOKUMENTATION.md  # architecture reference (deutsch)
 ```
 
