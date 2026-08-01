@@ -218,6 +218,26 @@ startup-launcher/
 └── resources/                  # icon + .desktop template
 ```
 
+## Testing
+
+```bash
+python3 -m unittest tests.test_cross_platform_contract -v
+python3 -m unittest discover -s tests -v
+```
+
+CI runs these checks on Ubuntu 22.04/24.04 (Python 3.11 and 3.12) on every push and
+pull request. **Windows is not supported** (requires `wmctrl` / Linux window management).
+
+### Multi-OS matrix (local Linux host)
+
+```bash
+~/os-test-matrix/bin/test-project /path/to/startup-launcher
+~/os-test-matrix/bin/test-project "$PWD" --only ubuntu-2404
+```
+
+On-demand Linux runners: [`OS Matrix`](.github/workflows/os-matrix.yml).
+Results: `~/os-test-matrix/results/`.
+
 ## Note: old autostart icon
 
 `~/.config/autostart/Start Config.desktop` still starts
