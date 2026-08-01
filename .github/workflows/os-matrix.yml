@@ -44,7 +44,8 @@ jobs:
           sudo apt-get install -y \
             python3-tk \
             wmctrl \
-            x11-utils
+            x11-utils \
+            xvfb
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -60,8 +61,8 @@ jobs:
         run: |
           python -m unittest tests.test_cross_platform_contract -v
 
-      - name: Run full checks
+      - name: Run full checks (headless display via Xvfb)
         if: inputs.test_mode == 'full'
         run: |
-          python -m unittest discover -s tests -v
+          xvfb-run -a python -m unittest discover -s tests -v
 
