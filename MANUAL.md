@@ -32,7 +32,7 @@ window grows to make room - nothing ever gets clipped off-screen.
 | Name | The entry's label | Double-click to edit in place |
 | Launch (▶) | — | Single click to launch this entry (or every entry in a group row) |
 | Enabled | ☑ / ☐ / ☒ (mixed, group only) | Single click to toggle; toggling a group toggles all its members |
-| Window Mode | Normal / Minimized / Maximized / Fullscreen | Via "Edit..." only |
+| Window Mode | Normal / Minimized / Maximized / Fullscreen | Double-click for a dropdown (Minimized/Maximized/Fullscreen still need a window match via Edit...) |
 | Delay (s) | Seconds to wait after startup before launching | Double-click to edit in place |
 | Command | The shell command that runs | Double-click to edit in place (quick single-line edit; use "Edit..." for the full multi-line view) |
 | XY | Last saved window position | Double-click to edit in place (`x,y`, e.g. `100,50`) |

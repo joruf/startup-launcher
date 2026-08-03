@@ -9,6 +9,7 @@ import json
 import os
 import tempfile
 import tkinter as tk
+from tkinter import ttk
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -233,6 +234,31 @@ class TestInlineEditCommitCancel(MainWindowTestCase):
         self.app._active_edit["var"].set("not-a-position")
         self.app._commit_inline_edit()
         self.assertNotIn("standalone", geometry_model.load_geometry())
+
+    def test_window_mode_edit_opens_a_combobox_and_commits_selection(self):
+        bbox = self.app.tree.bbox("e0", column="mode")
+        self._double_click(self.app.tree, bbox[0] + 5, bbox[1] + bbox[3] // 2)
+        self.assertEqual(self.app._active_edit["field"], "window_mode")
+        widget = self.app._active_edit["widget"]
+        self.assertIsInstance(widget, ttk.Combobox)
+        self.assertEqual(
+            list(widget.cget("values")),
+            [entry_model.WINDOW_MODE_LABELS[m] for m in entry_model.WINDOW_MODES],
+        )
+        self.app._active_edit["var"].set("Maximized")
+        self.app._commit_inline_edit()
+        self.assertEqual(self.app.entries[0]["window_mode"], "maximized")
+        self.assertEqual(self._entries_on_disk()[0]["window_mode"], "maximized")
+
+    def test_window_mode_edit_rejects_non_normal_without_match_string(self):
+        self.app.entries[0]["match_string"] = ""
+        self.app._save()
+        bbox = self.app.tree.bbox("e0", column="mode")
+        self._double_click(self.app.tree, bbox[0] + 5, bbox[1] + bbox[3] // 2)
+        self.app._active_edit["var"].set("Fullscreen")
+        self.app._commit_inline_edit()
+        self.assertEqual(self.app.entries[0]["window_mode"], "normal")
+        self.assertEqual(self._entries_on_disk()[0]["window_mode"], "normal")
 
 
 @requires_display

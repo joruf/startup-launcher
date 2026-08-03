@@ -55,12 +55,12 @@ COLUMN_LABELS = {
     "xy": "XY",
     "size": "Size",
 }
-# Treeview column ids ("#0", "#1", ...) that support single-click inline editing,
+# Treeview column ids ("#0", "#1", ...) that support double-click inline editing,
 # mapped to the entry/geometry field they edit. "launch" (button) and "enabled"
-# (checkbox) are overlay widgets, not text; "mode" is a fixed set of options
-# edited via the New/Edit dialog. All three are deliberately excluded here.
+# (checkbox) are overlay widgets, not text, so they are deliberately excluded.
 EDITABLE_FIELD_BY_TREECOL = {
     "#0": "name",
+    "#3": "window_mode",
     "#4": "delay",
     "#5": "command",
     "#6": "xy",
@@ -642,6 +642,8 @@ class StartupLauncherApp:
             current_text = _flatten_command(entry["command"])
         elif field == "delay":
             current_text = str(entry.get("delay_seconds", 0))
+        elif field == "window_mode":
+            current_text = entry_model.WINDOW_MODE_LABELS[entry["window_mode"]]
         else:
             saved = geometry_model.load_geometry().get(entry["id"])
             current_text = _format_xy(saved) if field == "xy" else _format_size(saved)
@@ -650,6 +652,14 @@ class StartupLauncherApp:
         if field == "delay":
             widget = ttk.Spinbox(
                 self.tree, from_=0, to=60, textvariable=var, width=5, font=INLINE_EDIT_FONT
+            )
+        elif field == "window_mode":
+            widget = ttk.Combobox(
+                self.tree,
+                textvariable=var,
+                values=[entry_model.WINDOW_MODE_LABELS[m] for m in entry_model.WINDOW_MODES],
+                state="readonly",
+                font=INLINE_EDIT_FONT,
             )
         else:
             widget = ttk.Entry(self.tree, textvariable=var, font=INLINE_EDIT_FONT)
@@ -662,11 +672,21 @@ class StartupLauncherApp:
         pad = max(8, widget.winfo_reqheight() - height + 2)
         widget.place(x=x, y=y - pad // 2, width=width, height=height + pad)
         widget.focus_set()
-        widget.select_range(0, "end")
-        widget.bind("<Return>", lambda _e: self._commit_inline_edit())
-        widget.bind("<KP_Enter>", lambda _e: self._commit_inline_edit())
-        widget.bind("<Escape>", lambda _e: self._cancel_inline_edit())
-        widget.bind("<FocusOut>", lambda _e: self._commit_inline_edit())
+
+        if field == "window_mode":
+            # Combobox: commit on pick. Skip FocusOut - opening the dropdown
+            # steals focus and would close the editor before a choice is made.
+            # Outside clicks still commit via _on_global_click.
+            widget.bind("<<ComboboxSelected>>", lambda _e: self._commit_inline_edit())
+            widget.bind("<Escape>", lambda _e: self._cancel_inline_edit())
+            # Drop the list open immediately so one double-click is enough to pick.
+            self.root.after(10, lambda w=widget: w.event_generate("<Down>"))
+        else:
+            widget.select_range(0, "end")
+            widget.bind("<Return>", lambda _e: self._commit_inline_edit())
+            widget.bind("<KP_Enter>", lambda _e: self._commit_inline_edit())
+            widget.bind("<Escape>", lambda _e: self._cancel_inline_edit())
+            widget.bind("<FocusOut>", lambda _e: self._commit_inline_edit())
 
         # Keep a Python reference to `var` for as long as the widget lives: a
         # tk.StringVar with no remaining Python references gets garbage-collected,
@@ -687,6 +707,13 @@ class StartupLauncherApp:
             self._suppress_global_close_count -= 1
             return
         if self._active_edit is None or clicked_widget is self._active_edit["widget"]:
+            return
+        # The Combobox dropdown listbox is a separate widget. Closing immediately
+        # on that click would destroy the editor before <<ComboboxSelected>> can
+        # apply the new value - delay so a real pick commits first, then this
+        # no-ops because _active_edit is already cleared.
+        if self._active_edit["field"] == "window_mode":
+            self.root.after(150, self._commit_inline_edit)
             return
         self._commit_inline_edit()
 
@@ -716,6 +743,19 @@ class StartupLauncherApp:
         elif field == "command":
             if value:
                 entry["command"] = value
+                self._save()
+        elif field == "window_mode":
+            label_to_key = {label: key for key, label in entry_model.WINDOW_MODE_LABELS.items()}
+            new_mode = label_to_key.get(value)
+            if new_mode is None:
+                pass
+            elif new_mode != "normal" and not entry.get("match_string", "").strip():
+                self._log(
+                    "Minimized/Maximized/Fullscreen require a search term "
+                    "(window class or title) - set one via Edit...."
+                )
+            else:
+                entry["window_mode"] = new_mode
                 self._save()
         elif field == "delay":
             try:
