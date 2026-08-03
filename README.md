@@ -35,6 +35,11 @@ click-to-edit fields, and remembered window positions:
 - Sortable columns, live-reload if `entries.json` changes on disk
 - Runs tray-only (GTK3), autostart toggle in the File/tray menu, and only
   one instance can ever run at a time
+- Login autostart that repairs its own `.desktop` entry, waits for the
+  desktop to finish coming up, and can start the launcher without starting
+  the entries ("Launch the enabled entries automatically at login")
+- Every start is recorded in `~/.local/state/startup-launcher/session.log`
+  (**Help > Startup Log...**), so a login run that misbehaves leaves a trace
 
 ## Requirements
 
@@ -89,13 +94,14 @@ startup-launcher/
 ├── entries.json                # your data (git-ignored)
 ├── entries.example.json        # generic template, committed - copy to entries.json
 ├── window_geometry.json        # last-seen position/size per entry (git-ignored)
-├── settings.json               # scan/restore/clean-shutdown settings (git-ignored)
+├── settings.json               # scan/login-launch/restore/clean-shutdown settings (git-ignored)
 ├── models/entries.py           # schema, default seed, JSON persistence
 ├── models/geometry.py          # window_geometry.json persistence
 ├── services/launcher.py        # process start + wmctrl window state + per-entry delay
 ├── services/geometry.py        # scan/restore window position via wmctrl
 ├── services/single_instance.py # single-instance lock (fcntl.flock)
 ├── services/instance_ipc.py    # Unix-socket "show yourself" IPC for the lock above
+├── services/session_log.py     # append-only start/exit log (autostart diagnostics)
 ├── config/autostart.py         # manage the autostart desktop entry
 ├── config/settings.py          # settings.json persistence + clean-shutdown flag
 ├── ui/main_window.py           # main window (StartupLauncherApp)

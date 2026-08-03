@@ -119,12 +119,42 @@ class TestLaunchEntries(unittest.TestCase):
         launcher.launch_entries([entry], log=self.log)
 
         mock_launch_entry.assert_not_called()
-        args, kwargs = mock_timer.call_args
+        args, _kwargs = mock_timer.call_args
         self.assertEqual(args[0], 7)
-        self.assertIs(args[1], launcher.launch_entry)
-        self.assertEqual(kwargs["kwargs"], {"entry": entry, "log": self.log, "geometry_restore": None})
         mock_timer.return_value.start.assert_called_once()
         self.assertTrue(mock_timer.return_value.daemon)
+
+        args[1]()  # what the timer runs once the delay is over
+        mock_launch_entry.assert_called_once_with(entry, log=self.log, geometry_restore=None)
+
+    @patch("services.launcher.threading.Timer")
+    @patch("services.launcher.launch_entry")
+    def test_custom_scheduler_replaces_the_timer_thread(self, mock_launch_entry, mock_timer):
+        scheduled = []
+        entry = _entry(delay_seconds=5)
+
+        launcher.launch_entries([entry], log=self.log, schedule=lambda delay, cb: scheduled.append((delay, cb)))
+
+        mock_timer.assert_not_called()
+        mock_launch_entry.assert_not_called()
+        self.assertEqual(len(scheduled), 1)
+        delay, callback = scheduled[0]
+        self.assertEqual(delay, 5)
+
+        callback()
+        mock_launch_entry.assert_called_once_with(entry, log=self.log, geometry_restore=None)
+
+    @patch("services.launcher.launch_entry")
+    def test_every_delayed_entry_keeps_its_own_entry(self, mock_launch_entry):
+        first = _entry(id="a", name="A", delay_seconds=3)
+        second = _entry(id="b", name="B", delay_seconds=6)
+        scheduled = []
+
+        launcher.launch_entries([first, second], log=self.log, schedule=lambda _delay, cb: scheduled.append(cb))
+        for callback in scheduled:
+            callback()
+
+        self.assertEqual([call.args[0]["name"] for call in mock_launch_entry.call_args_list], ["A", "B"])
 
 
 class TestApplyWindowState(unittest.TestCase):

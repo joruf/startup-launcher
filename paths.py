@@ -10,6 +10,10 @@ STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "stat
 RUNTIME_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", STATE_DIR))
 LOCK_DIR = RUNTIME_DIR / "startup-launcher"
 
+# Outlives the login session on purpose: an autostart run that fails has to stay
+# readable after the next reboot.
+SESSION_LOG_FILE = STATE_DIR / "startup-launcher" / "session.log"
+
 ENTRIES_FILE = PROJECT_ROOT / "entries.json"
 EXAMPLE_ENTRIES_FILE = PROJECT_ROOT / "entries.example.json"
 GEOMETRY_FILE = PROJECT_ROOT / "window_geometry.json"

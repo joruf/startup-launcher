@@ -8,15 +8,18 @@ which run the suite under xvfb-run).
 import json
 import os
 import tempfile
+import threading
 import tkinter as tk
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from config import autostart
 from config import settings as settings_store
 from models import entries as entry_model
 from models import geometry as geometry_model
 from services import instance_ipc
+from services import session_log
 from ui import main_window
 
 requires_display = unittest.skipUnless(
@@ -78,6 +81,9 @@ class MainWindowTestCase(unittest.TestCase):
 
         self.entries_file.write_text(json.dumps(_sample_entries()), encoding="utf-8")
 
+        # Kept for the few tests that need the real thing back (see TestWindowVisibility).
+        self.real_start_tray_icon = main_window.StartupLauncherApp._start_tray_icon
+
         patches = [
             patch.object(entry_model, "ENTRIES_FILE", self.entries_file),
             patch.object(entry_model, "EXAMPLE_ENTRIES_FILE", tmp / "entries.example.json"),
@@ -85,6 +91,11 @@ class MainWindowTestCase(unittest.TestCase):
             patch.object(geometry_model, "GEOMETRY_FILE", self.geometry_file),
             patch.object(settings_store, "SETTINGS_FILE", self.settings_file),
             patch.object(instance_ipc, "SOCKET_FILE", self.socket_file),
+            # The app checks (and repairs) its own autostart entry and logs every
+            # start: unpatched, the suite would write into the real ~/.config and
+            # ~/.local/state of whoever runs it.
+            patch.object(autostart, "AUTOSTART_DIR", tmp / "autostart"),
+            patch.object(session_log, "SESSION_LOG_FILE", tmp / "session.log"),
             patch.object(main_window.StartupLauncherApp, "_start_tray_icon", lambda self: None),
             patch.object(main_window.StartupLauncherApp, "_start_control_server", lambda self: None),
         ]
@@ -357,6 +368,84 @@ class TestExternalEntriesFileChange(MainWindowTestCase):
         original_entries_object = self.app.entries
         self.app._check_entries_file_changed()
         self.assertIs(self.app.entries, original_entries_object)
+
+
+@requires_display
+class TestAutostartRun(MainWindowTestCase):
+    """The login run: launches the entries itself, so it must not depend on the GUI."""
+
+    def _autostart_app(self):
+        app = main_window.StartupLauncherApp(self.root, auto_run=True)
+        self._pump()
+        return app
+
+    @patch("ui.main_window.launcher.launch_entry")
+    def test_autostart_run_launches_the_enabled_entries(self, mock_launch):
+        self._autostart_app()
+        self.root.after(main_window.AUTOSTART_LAUNCH_DELAY_MS + 50, self.root.quit)
+        self.root.mainloop()
+
+        self.assertEqual({call.args[0]["id"] for call in mock_launch.call_args_list}, {"standalone"})
+
+    @patch("ui.main_window.launcher.launch_entry")
+    def test_launch_at_login_off_starts_the_app_without_the_entries(self, mock_launch):
+        settings_store.save_settings({"launch_at_login": False})
+
+        self._autostart_app()
+        self.root.after(main_window.AUTOSTART_LAUNCH_DELAY_MS + 50, self.root.quit)
+        self.root.mainloop()
+
+        mock_launch.assert_not_called()
+
+    @patch("ui.main_window.launcher.launch_entry")
+    def test_delayed_entries_are_launched_on_the_tk_clock(self, mock_launch):
+        # Entry "vscode-a" carries delay_seconds=2; scheduling it as a Tk timer keeps
+        # the launch (and its status-line update) on the mainloop's thread.
+        self.app._start_all()
+        launched_immediately = {call.args[0]["id"] for call in mock_launch.call_args_list}
+        self.assertEqual(launched_immediately, {"standalone"})
+
+        pending = self.root.tk.call("after", "info")
+        self.assertTrue(pending, "delayed entry should have left a Tk timer behind")
+
+
+@requires_display
+class TestWindowVisibility(MainWindowTestCase):
+    """The window is built withdrawn, so who un-withdraws it decides what the user sees."""
+
+    def _app_with_working_tray(self, auto_run):
+        with patch.object(main_window.TrayIcon, "start", lambda _self: True):
+            app = main_window.StartupLauncherApp(self.root, auto_run=auto_run)
+            self.real_start_tray_icon(app)
+        self._pump()
+        return app
+
+    def test_manual_start_shows_the_window(self):
+        self._app_with_working_tray(auto_run=False)
+        self.assertEqual(self.root.state(), "normal")
+
+    def test_autostart_run_stays_in_the_tray(self):
+        self.root.withdraw()
+        self._app_with_working_tray(auto_run=True)
+        self.assertEqual(self.root.state(), "withdrawn")
+
+
+@requires_display
+class TestStatusLogging(MainWindowTestCase):
+    def test_log_from_a_worker_thread_reaches_the_status_line(self):
+        # launcher.py logs from its window-state workers, so the status line has to
+        # survive being written to from outside the mainloop's thread.
+        thread = threading.Thread(target=lambda: self.app._log("from a worker thread"), daemon=True)
+        thread.start()
+        self.root.after(300, self.root.quit)
+        self.root.mainloop()
+        thread.join(timeout=5)
+
+        self.assertEqual(self.app.status_var.get(), "from a worker thread")
+
+    def test_log_after_the_window_is_gone_does_not_raise(self):
+        self._destroy_root()
+        self.app._log("too late")  # launcher threads outlive the window on shutdown
 
 
 if __name__ == "__main__":

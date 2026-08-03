@@ -87,23 +87,35 @@ def launch_entry(entry, log=None, geometry_restore=None):
         threading.Thread(target=_apply_window_state, args=(entry, log), daemon=True).start()
 
 
-def launch_entries(entries, log=None, geometry_restore=None):
+def _timer_schedule(delay_seconds, callback):
+    """Default scheduler for delayed entries: one daemon timer thread each."""
+    timer = threading.Timer(delay_seconds, callback)
+    timer.daemon = True
+    timer.start()
+
+
+def launch_entries(entries, log=None, geometry_restore=None, schedule=None):
     """
     Launch every enabled entry in the given list (non-blocking, like the old script).
 
     Entries with a delay_seconds > 0 are launched after that many seconds instead of
     immediately, so a startup sequence can stagger heavy programs.
+
+    :param schedule: optional callable(delay_seconds, callback) used for delayed
+        entries; the GUI passes its Tk timer so a delayed launch - and the log line
+        it writes - happens on the main thread instead of in a timer thread
     """
+    schedule = schedule or _timer_schedule
+
     for entry in entries:
         if not entry.get("enabled", True):
             continue
 
         delay = entry.get("delay_seconds", 0)
         if delay > 0:
-            timer = threading.Timer(
-                delay, launch_entry, kwargs={"entry": entry, "log": log, "geometry_restore": geometry_restore}
+            schedule(
+                delay,
+                lambda entry=entry: launch_entry(entry, log=log, geometry_restore=geometry_restore),
             )
-            timer.daemon = True
-            timer.start()
         else:
             launch_entry(entry, log=log, geometry_restore=geometry_restore)
