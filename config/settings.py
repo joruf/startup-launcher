@@ -6,6 +6,10 @@ from paths import SETTINGS_FILE
 DEFAULTS = {
     "scan_enabled": True,
     "scan_interval_minutes": 10,
+    # Whether an autostart run (run.py --autostart) launches the enabled entries.
+    # On by default: that is the whole point of the login autostart entry. Turn it
+    # off to have the launcher itself start into the tray without touching anything.
+    "launch_at_login": True,
     # Off by default: only enable once saved positions look right when restored manually.
     "restore_on_startup": False,
     # Set True only by a graceful quit (File/tray > Quit); cleared at the start of every

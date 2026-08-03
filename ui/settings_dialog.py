@@ -10,7 +10,7 @@ SCAN_INTERVAL_CHOICES = [1, 5, 10, 15, 30, 60, 120]
 
 
 class SettingsDialog(tk.Toplevel):
-    """Dialog to configure periodic window-position scanning and startup restore."""
+    """Dialog to configure window-position scanning, the login launch, and startup restore."""
 
     def __init__(self, parent):
         super().__init__(parent)
@@ -46,12 +46,32 @@ class SettingsDialog(tk.Toplevel):
             row=2, column=0, columnspan=2, sticky="we", pady=10
         )
 
+        self.launch_at_login_var = tk.BooleanVar(value=current["launch_at_login"])
+        ttk.Checkbutton(
+            form,
+            text="Launch the enabled entries automatically at login",
+            variable=self.launch_at_login_var,
+        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(0, 4))
+        ttk.Label(
+            form,
+            text=(
+                "Needs \"Run Automatically at Startup\" (File menu) as well: that one\n"
+                "starts the launcher itself at login, this one decides whether it then\n"
+                "runs your programs or just waits in the tray."
+            ),
+            foreground="#71717a",
+        ).grid(row=4, column=0, columnspan=2, sticky="w")
+
+        ttk.Separator(form, orient="horizontal").grid(
+            row=5, column=0, columnspan=2, sticky="we", pady=10
+        )
+
         self.restore_var = tk.BooleanVar(value=current["restore_on_startup"])
         ttk.Checkbutton(
             form,
             text="Restore saved window positions automatically at startup",
             variable=self.restore_var,
-        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(0, 4))
+        ).grid(row=6, column=0, columnspan=2, sticky="w", pady=(0, 4))
         ttk.Label(
             form,
             text=(
@@ -60,10 +80,10 @@ class SettingsDialog(tk.Toplevel):
                 "on the next login."
             ),
             foreground="#71717a",
-        ).grid(row=4, column=0, columnspan=2, sticky="w")
+        ).grid(row=7, column=0, columnspan=2, sticky="w")
 
         button_row = ttk.Frame(form)
-        button_row.grid(row=5, column=0, columnspan=2, sticky="e", pady=(16, 0))
+        button_row.grid(row=8, column=0, columnspan=2, sticky="e", pady=(16, 0))
         ttk.Button(button_row, text="Cancel", command=self.destroy).grid(row=0, column=0, padx=4)
         ttk.Button(
             button_row, text="Save", style="Primary.TButton", command=self._save
@@ -81,6 +101,7 @@ class SettingsDialog(tk.Toplevel):
         self.result = {
             "scan_enabled": self.scan_enabled_var.get(),
             "scan_interval_minutes": interval,
+            "launch_at_login": self.launch_at_login_var.get(),
             "restore_on_startup": self.restore_var.get(),
         }
         self.destroy()

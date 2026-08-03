@@ -14,8 +14,9 @@ folgen alle demselben Muster: **`ui/` → `services/`/`config/` → `models/` �
   Layout, Zustände wie "welche Zelle wird gerade bearbeitet"), aber keine
   Geschäftslogik und kein `subprocess`/`wmctrl` direkt.
 - **`services/`** — Prozessstart, Fenstererkennung/-positionierung via
-  `wmctrl`/`xprop`, Single-Instance-Lock/IPC. Reine Funktionen/Klassen ohne
-  Tkinter-Abhängigkeit — deshalb headless testbar (siehe [Tests](#6-tests)).
+  `wmctrl`/`xprop`, Single-Instance-Lock/IPC, Start-/Exit-Log. Reine
+  Funktionen/Klassen ohne Tkinter-Abhängigkeit — deshalb headless testbar
+  (siehe [Tests](#6-tests)).
 - **`config/`** — Anwendungsweite Einstellungen (`settings.json`) und die
   Autostart-`.desktop`-Datei.
 - **`models/`** — Schema, Default-Seed und Persistenz für Einträge
@@ -78,14 +79,73 @@ ein Stromausfall lässt ihn auf `False` — und genau das ist das Signal, das
 startup" für genau einen Lauf zu überspringen, falls die zuletzt gespeicherten
 Positionen nicht vertrauenswürdig sein könnten.
 
+`launch_at_login` (Default `True`) ist der zweite Login-Schalter neben der
+`.desktop`-Datei: er entscheidet, ob ein `--autostart`-Lauf die aktivierten
+Einträge startet oder nur ins Tray geht. Beides ist absichtlich getrennt —
+"Launcher startet mit" und "Launcher startet meine Programme" sind zwei
+verschiedene Aussagen, und nur die erste steht in `~/.config/autostart/`.
+
+### `config/autostart.py`
+
+Schreibt/entfernt `~/.config/autostart/Startup Launcher.desktop`. Der Inhalt
+wird bewusst so erzeugt, dass er nicht von der Login-Umgebung abhängt:
+
+- **absoluter Interpreterpfad** (`sys.executable`, Fallback
+  `shutil.which("python3")`): `PATH` ist im Autostart-Kontext nicht dasselbe
+  wie in einer Login-Shell,
+- **`Path=`** auf das Projektverzeichnis, statt sich auf ein Arbeitsverzeichnis
+  zu verlassen,
+- **`--autostart`** — ohne dieses Flag startet nur die GUI, und kein einziger
+  Eintrag wird ausgeführt,
+- **`X-GNOME-Autostart-Delay=10`**: Cinnamon/GNOME feuern Autostart-Einträge,
+  während das Panel samt Systray-Bereich noch hochkommt. Der Lauf in dieses
+  Rennen hinein kostete das Tray-Icon.
+
+`refresh_if_enabled()` wird bei **jedem** App-Start aufgerufen
+(`StartupLauncherApp.__init__`) und schreibt eine vorhandene, aber inhaltlich
+abweichende `.desktop`-Datei neu (`is_outdated()`). Ohne das behält ein
+Eintrag aus einer älteren Version — z. B. einer noch ohne `--autostart` — sein
+Verhalten, bis die Checkbox einmal aus- und wieder eingeschaltet wird: die
+Checkbox zeigt "an", der Login tut trotzdem nichts. Ist Autostart aus, tut die
+Funktion nichts (sie schaltet nie von sich aus ein).
+
+### `services/session_log.py`
+
+Ein Autostart-Lauf hat kein Terminal. Läuft dort etwas schief, bleibt ohne
+eigenes Log nichts übrig, was man nachher ansehen könnte — genau die Situation,
+in der halb gestartete Programme und ein fehlendes Tray-Icon nicht mehr
+erklärbar sind. Deshalb protokolliert `write()` zeilenweise nach
+`$XDG_STATE_HOME/startup-launcher/session.log` (bewusst **nicht** in
+`XDG_RUNTIME_DIR`, das beim Reboot verschwindet):
+
+- Start mit Modus (`autostart`/`manual`) und PID, abgelehnte Zweitstarts,
+- wie viele Einträge der Login-Lauf gestartet hat bzw. dass
+  `launch_at_login` aus ist,
+- fehlendes Tray, Traceback bei einem Absturz, sauberes Ende.
+
+Fehlt eine Start-/Endezeile-Paarung, ist der Prozess unterwegs gestorben.
+Schreibfehler werden geschluckt (`OSError`) — ein Log darf einen Start nie
+verhindern. Ab `MAX_BYTES` wird einmal nach `session.log.1` rotiert.
+**Help > Startup Log...** zeigt die letzten Zeilen in der UI.
+
 ## 3. Prozessstart & Fensterverwaltung
 
 ### `services/launcher.py`
 
 `launch_entries()` iteriert über alle aktivierten Einträge; bei
-`delay_seconds > 0` wird `launch_entry` über einen `threading.Timer` statt
-sofort aufgerufen (daemon-Thread, damit ein noch ausstehender Timer den
-App-Exit nicht blockiert). `launch_entry()` selbst:
+`delay_seconds > 0` wird der Start verzögert eingeplant statt sofort
+ausgeführt. Wie geplant wird, entscheidet der optionale
+`schedule(delay_seconds, callback)`-Parameter:
+
+- **ohne** ihn ein `threading.Timer` pro Eintrag (daemon-Thread, damit ein
+  noch ausstehender Timer den App-Exit nicht blockiert) — der Default für
+  Aufrufer ohne Tk,
+- **mit** ihm die Tk-Uhr: `StartupLauncherApp` übergibt
+  `_schedule_delayed_launch`, also `root.after(...)`. Der verzögerte Start und
+  die Statuszeile, die er schreibt, laufen damit im Mainloop-Thread statt in
+  einem Timer-Thread.
+
+`launch_entry()` selbst:
 
 1. flacht den (ggf. mehrzeiligen) Befehl über `_flatten_command()` auf eine
    Zeile ab und parst ihn mit `shlex.split()`,
@@ -221,6 +281,29 @@ macht das Fenster schmaler), meldet der `on_rows_changed`-Callback das an
 die Höhe der neuen Zeile(n) vergrößert — Buttons laufen nie unsichtbar über
 den Fensterrand hinaus.
 
+### Sichtbarkeit: manueller Start vs. Autostart-Lauf
+
+Das Fenster wird komplett `withdraw()`ed aufgebaut (`__init__`) — wer es
+wieder einblendet, entscheidet also, was der Nutzer sieht. Das passiert
+ausschließlich in `_start_tray_icon()`:
+
+- **manueller Start** — Fenster auf, egal ob das Tray funktioniert. Sonst
+  sieht ein Start aus wie "nichts passiert".
+- **Autostart-Lauf** (`--autostart`) — bleibt versteckt, auch wenn gar kein
+  Tray-Icon zustande kommt (fehlende GTK3-Bindings). Ein Login-Lauf soll dem
+  Nutzer kein Fenster ins Gesicht schieben; der Fall wird stattdessen ins
+  Session-Log geschrieben.
+
+### `_log()` und Threads
+
+`launcher.py` loggt aus seinen Fenster-State-Workern, also aus fremden
+Threads. `_log()` schreibt die Statuszeile deshalb nur direkt, wenn es im
+Main-Thread läuft, und delegiert sonst über `root.after(0, ...)` an den
+Mainloop — dieselbe Regel wie beim IPC-`on_show`-Callback (siehe
+[Single-Instance & IPC](#4-single-instance--ipc)). Nach dem Fensterabbau
+laufen Worker-Threads noch kurz weiter, deshalb schluckt der Delegationspfad
+`TclError`/`RuntimeError`: eine Statuszeile ist keinen Absturz wert.
+
 ## 6. Tests
 
 ```bash
@@ -233,20 +316,25 @@ xvfb-run -a python3 -m unittest discover -s tests -v   # headless, wie in CI
 | `test_json_store.py` | `json_store.py` | Atomares Schreiben (kein Leftover-Tempfile, kein Datenverlust bei Fehler), resiliente Reads (fehlende/leere/kaputte Datei) |
 | `test_models_entries.py` | `models/entries.py` | Schema-Backfill (`id`, `delay_seconds`), Seeding aus `entries.example.json`, `clamp_delay_seconds`, Gruppen-Set |
 | `test_models_geometry.py` | `models/geometry.py` | Round-Trip Laden/Speichern |
-| `test_config_settings.py` | `config/settings.py` | Defaults-Merge, `clean_shutdown`-Lebenszyklus (`mark_session_started`/`mark_clean_shutdown`) |
-| `test_config_autostart.py` | `config/autostart.py` | `.desktop`-Datei anlegen/entfernen, Inhalt (`--autostart`-Flag) |
-| `test_services_launcher.py` | `services/launcher.py` | Befehlsparsing/-fehler, Delay über `threading.Timer` vs. Sofortstart, wmctrl-Statuswechsel inkl. Timeout (alles mit gemocktem `subprocess`/`threading`) |
+| `test_config_settings.py` | `config/settings.py` | Defaults-Merge, `launch_at_login`-Default, `clean_shutdown`-Lebenszyklus (`mark_session_started`/`mark_clean_shutdown`) |
+| `test_config_autostart.py` | `config/autostart.py` | `.desktop`-Datei anlegen/entfernen, Inhalt (`--autostart`-Flag, absoluter Interpreter, `Path=`, Autostart-Delay), Selbstreparatur eines veralteten Eintrags |
+| `test_services_launcher.py` | `services/launcher.py` | Befehlsparsing/-fehler, Delay über `threading.Timer` bzw. eigenen `schedule`-Callback vs. Sofortstart, wmctrl-Statuswechsel inkl. Timeout (alles mit gemocktem `subprocess`/`threading`) |
+| `test_services_session_log.py` | `services/session_log.py` | Anlegen/Anhängen mit Zeitstempel, mehrzeilige Einträge, Rotation ab `MAX_BYTES`, nicht schreibbarer Pfad wirft nicht |
 | `test_services_geometry.py` | `services/geometry.py` | `wmctrl -lG`-Parsing, Klassen-/Titel-Matching, Scan/Restore/Forget-Round-Trip (gemocktes `subprocess`, echtes Temp-Filesystem für `window_geometry.json`) |
 | `test_services_single_instance.py` | `services/single_instance.py` | Echter `fcntl.flock` gegen eine Temp-Lockdatei: zweiter Guard blockiert, Freigabe nach `release()`, `enforce_single_instance` in beiden Modi |
 | `test_services_instance_ipc.py` | `services/instance_ipc.py` | Echter Unix-Socket-Roundtrip inkl. verwaistem Socket-File einer "abgestürzten" vorherigen Instanz |
-| `test_ui_main_window.py` | `ui/main_window.py` | Inline-Edit öffnen/committen/abbrechen (inkl. der Doppelklick-Suppress-Counter-Regression von oben), Checkbox-/Gruppen-Kaskade, Launch-Button, Sortierung, Move Up/Down, Delete (bestätigt/abgelehnt), externe `entries.json`-Änderungserkennung |
+| `test_ui_main_window.py` | `ui/main_window.py` | Inline-Edit öffnen/committen/abbrechen (inkl. der Doppelklick-Suppress-Counter-Regression von oben), Checkbox-/Gruppen-Kaskade, Launch-Button, Sortierung, Move Up/Down, Delete (bestätigt/abgelehnt), externe `entries.json`-Änderungserkennung, Autostart-Lauf (startet Einträge, respektiert `launch_at_login`), Fenstersichtbarkeit manuell vs. Autostart, Statuszeile aus einem Worker-Thread |
 | `test_ui_entry_dialog.py` | `ui/entry_dialog.py` | Pflichtfeld-Validierung, Speichern-Ergebnisform, mehrzeiliger Befehl bleibt beim Speichern unverändert |
 | `test_ui_settings_dialog.py` | `ui/settings_dialog.py` | Vorbefüllung, Speichern-Ergebnisform, Fallback bei ungültigem Scan-Intervall |
 
 Die `test_ui_*`-Dateien bauen jeweils eine isolierte `StartupLauncherApp`
 gegen temporäre Datendateien auf (alle relevanten `*_FILE`-Konstanten werden
 per `unittest.mock.patch.object` umgebogen) — sie fassen nie die echten
-`entries.json`/`window_geometry.json`/`settings.json` an. Tray-Icon und
+`entries.json`/`window_geometry.json`/`settings.json` an. Dazu gehören auch
+`autostart.AUTOSTART_DIR` und `session_log.SESSION_LOG_FILE`: die App prüft
+beim Start ihren eigenen Autostart-Eintrag und protokolliert jeden Start, würde
+also sonst in das echte `~/.config` bzw. `~/.local/state` desjenigen schreiben,
+der die Suite laufen lässt. Tray-Icon und
 IPC-Control-Server werden in diesen Tests zusätzlich auf No-Op gepatcht, da
 sie in `test_services_instance_ipc.py` bereits eigenständig abgedeckt sind
 und ein echter GTK-Thread/Socket in jedem einzelnen UI-Test nur unnötige

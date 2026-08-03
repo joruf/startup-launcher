@@ -112,10 +112,37 @@ every autostart launch will:
 
 ## 6. Running Automatically at Login
 
-Turn it on/off via **File > "Run Automatically at Startup"** (also available
-as a checkbox in the tray icon's right-click menu — both control the same
-setting). This writes or removes a `.desktop` file in
-`~/.config/autostart/`.
+Two switches work together here:
+
+1. **File > "Run Automatically at Startup"** (also a checkbox in the tray
+   icon's right-click menu — both control the same setting) starts *the
+   launcher itself* at login. It writes or removes a `.desktop` file in
+   `~/.config/autostart/`.
+2. **Window Positions > Settings... > "Launch the enabled entries
+   automatically at login"** decides whether that login run then *starts
+   your programs* (like Start All) or just waits in the tray. On by default.
+
+So switch 1 off means nothing happens at login at all; switch 1 on with
+switch 2 off gives you the tray icon and nothing else.
+
+The login run deliberately stays invisible — you get a tray icon, not a
+window. Started by hand, the window opens normally.
+
+The autostart entry is re-checked on every start and rewritten when it is out
+of date (written by an older version, or edited by a desktop settings tool),
+so a ticked checkbox keeps doing what it promises across updates.
+
+Your programs start about 10 seconds into the login: the entry asks the
+desktop to wait that long so the panel and its tray area are up first.
+Per-entry delays are counted from there.
+
+### Checking what happened at the last login
+
+**Help > Startup Log...** shows the last few starts: when the app started,
+whether it came from autostart, how many entries it launched, and whether it
+exited normally or died. A login run has no terminal to print to, so this
+file (`~/.local/state/startup-launcher/session.log`) is where to look when
+something didn't come up.
 
 If you were previously using an old bash script directly via autostart,
 disable that old entry once Startup Launcher's autostart is on, or your

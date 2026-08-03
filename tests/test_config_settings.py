@@ -20,6 +20,13 @@ class TestSettings(unittest.TestCase):
     def test_missing_file_returns_defaults(self):
         self.assertEqual(settings_store.load_settings(), settings_store.DEFAULTS)
 
+    def test_launching_entries_at_login_is_on_by_default(self):
+        self.assertTrue(settings_store.load_settings()["launch_at_login"])
+
+    def test_launching_entries_at_login_can_be_switched_off(self):
+        settings_store.save_settings({"launch_at_login": False})
+        self.assertFalse(settings_store.load_settings()["launch_at_login"])
+
     def test_partial_file_is_merged_over_defaults(self):
         settings_store.save_settings({"scan_interval_minutes": 30})
         loaded = settings_store.load_settings()

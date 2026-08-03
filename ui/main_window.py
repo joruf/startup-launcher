@@ -1,16 +1,20 @@
 """Main application window for Startup Launcher."""
 
+import os
 import sys
+import threading
 import tkinter as tk
+import traceback
 from tkinter import messagebox, ttk
 
 from config import autostart
 from config import settings as settings_store
 from models import entries as entry_model
 from models import geometry as geometry_model
-from paths import ENTRIES_FILE, ICON_FILE
+from paths import ENTRIES_FILE, ICON_FILE, SESSION_LOG_FILE
 from services import geometry as geometry_service
 from services import launcher
+from services import session_log
 from services.instance_ipc import InstanceControlServer
 from services.single_instance import enforce_single_instance
 from ui.entry_dialog import EntryDialog
@@ -40,6 +44,13 @@ CHECKBOX_FONT = ("TkDefaultFont", 15)
 INLINE_EDIT_FONT = ("TkDefaultFont", 9)
 
 ENTRIES_POLL_INTERVAL_MS = 2000
+
+# Let the window/tray finish coming up before the first programs are spawned; the
+# login itself is already staggered by the .desktop entry's autostart delay.
+AUTOSTART_LAUNCH_DELAY_MS = 300
+
+# Enough to cover the last few starts without turning the dialog into a wall of text.
+SESSION_LOG_TAIL_LINES = 20
 
 # Columns after the tree's own #0 (Name) column. "launch" isn't sortable (no
 # underlying data to sort by), so it's excluded from the header-click-to-sort
@@ -108,6 +119,8 @@ class StartupLauncherApp:
         apply_window_icon(root)
 
         self.autostart_var = tk.BooleanVar(value=autostart.is_enabled())
+        if autostart.refresh_if_enabled():
+            session_log.write("autostart entry was outdated - rewritten.")
 
         root.title("Startup Launcher")
         root.geometry("1100x560")
@@ -166,7 +179,10 @@ class StartupLauncherApp:
         self.root.after(ENTRIES_POLL_INTERVAL_MS, self._check_entries_file_changed)
 
         if auto_run:
-            root.after(300, self._start_all)
+            if settings_store.load_settings().get("launch_at_login", True):
+                root.after(AUTOSTART_LAUNCH_DELAY_MS, self._start_all)
+            else:
+                session_log.write("autostart run: 'launch at login' is off, started into the tray only.")
 
     # -- layout -----------------------------------------------------------
 
@@ -254,14 +270,17 @@ class StartupLauncherApp:
         )
 
         help_menu = tk.Menu(menubar, tearoff=False)
+        help_menu.add_command(label="Startup Log...", command=self._show_session_log)
+        help_menu.add_separator()
         help_menu.add_command(label="About", command=self._show_about)
         help_menu.add_command(label="Developer", command=self._show_developer)
         menubar.add_cascade(label="Help", menu=help_menu)
         self._bind_menu_hints(
             help_menu,
             {
-                0: "Show what this app does.",
-                1: "Show developer/contact info.",
+                0: "Show what happened during the last (auto)starts.",
+                2: "Show what this app does.",
+                3: "Show developer/contact info.",
             },
         )
 
@@ -285,6 +304,16 @@ class StartupLauncherApp:
             "login startup programs.",
         )
 
+    def _show_session_log(self):
+        """Show the tail of the startup log - the only record an autostart run leaves."""
+        try:
+            lines = SESSION_LOG_FILE.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            lines = []
+
+        tail = "\n".join(lines[-SESSION_LOG_TAIL_LINES:]) if lines else "(no entries yet)"
+        messagebox.showinfo("Startup Log", f"{SESSION_LOG_FILE}\n\n{tail}")
+
     def _show_developer(self):
         messagebox.showinfo(
             "Developer",
@@ -305,11 +334,17 @@ class StartupLauncherApp:
         )
         if tray.start():
             self._tray_icon = tray
+            if not self._auto_run:
+                # Only the login run is meant to stay invisible. Started by hand the
+                # window has to come up, otherwise the app looks like it didn't start
+                # at all - the whole window is built withdrawn (see __init__).
+                self._show_from_tray()
         elif self._auto_run:
             # Started via autostart: stay tray-only no matter what, even without a
             # tray icon to show for it - open the app manually later to fix GTK3
             # or to reach the window.
             self._log("System tray unavailable (GTK3 bindings missing). Staying hidden (autostart run).")
+            session_log.write("autostart run: system tray unavailable (GTK3 bindings missing).")
         else:
             self._log("System tray unavailable (GTK3 bindings missing). Window stays open.")
             self.root.deiconify()
@@ -347,7 +382,23 @@ class StartupLauncherApp:
     # -- helpers ---------------------------------------------------------
 
     def _log(self, message):
-        self.status_var.set(message)
+        """
+        Show a message in the status line, from any thread.
+
+        Tk/Tcl belongs to the thread that runs the mainloop, and launcher.py logs
+        from its window-state worker threads. Touching the widget from there is a
+        coin flip between "works", "RuntimeError: main thread is not in main loop"
+        and taking the whole process down - which is exactly what an autostart run
+        cannot afford, since it would abort the login sequence halfway through.
+        """
+        if threading.current_thread() is threading.main_thread():
+            self.status_var.set(message)
+            return
+
+        try:
+            self.root.after(0, self.status_var.set, message)
+        except (tk.TclError, RuntimeError):
+            pass  # interpreter already gone; a status line is not worth a crash
 
     def _current_entries_mtime(self):
         try:
@@ -892,7 +943,21 @@ class StartupLauncherApp:
         settings = settings_store.load_settings()
         if self._auto_run and self._last_shutdown_was_clean and settings.get("restore_on_startup", False):
             restore_fn = geometry_service.wait_and_restore_geometry
-        launcher.launch_entries(self.entries, log=self._log, geometry_restore=restore_fn)
+
+        enabled = [entry for entry in self.entries if entry.get("enabled", True)]
+        if self._auto_run:
+            session_log.write(f"autostart run: launching {len(enabled)} enabled entries.")
+
+        launcher.launch_entries(
+            self.entries,
+            log=self._log,
+            geometry_restore=restore_fn,
+            schedule=self._schedule_delayed_launch,
+        )
+
+    def _schedule_delayed_launch(self, delay_seconds, callback):
+        """Run a delayed entry's launch on the Tk clock instead of in a timer thread."""
+        self.root.after(int(delay_seconds * 1000), callback)
 
     def _toggle_autostart(self):
         if self.autostart_var.get():
@@ -957,15 +1022,27 @@ class StartupLauncherApp:
 
 
 def main():
-    auto_run = "--autostart" in sys.argv[1:]
+    auto_run = autostart.AUTOSTART_FLAG in sys.argv[1:]
+    mode = "autostart" if auto_run else "manual"
 
     may_continue, instance_guard = enforce_single_instance(quiet=auto_run)
     if not may_continue:
+        session_log.write(f"{mode} start refused: another instance is already running.")
         return 1
 
-    root = tk.Tk()
-    app = StartupLauncherApp(root, auto_run=auto_run)
-    app._instance_guard = instance_guard
-    root.mainloop()
+    session_log.write(f"{mode} start (pid {os.getpid()}).")
+    try:
+        root = tk.Tk()
+        app = StartupLauncherApp(root, auto_run=auto_run)
+        app._instance_guard = instance_guard
+        root.mainloop()
+    except BaseException:
+        # An autostart run has nowhere to print a traceback to, so keep it on disk:
+        # a run that dies mid-sequence otherwise leaves half-started programs and
+        # no explanation.
+        session_log.write(f"{mode} run failed:\n{traceback.format_exc()}")
+        raise
+
     instance_guard.release()
+    session_log.write(f"{mode} run exited normally.")
     return 0
