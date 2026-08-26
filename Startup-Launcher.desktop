@@ -1,0 +1,14 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Startup Launcher
+GenericName=Login startup manager
+Comment=Configurable login startup for programs and window placement
+Comment[de]=Programmstart bei der Anmeldung samt Fensterplatzierung einrichten
+# %k is this .desktop file, so ./run.py is always the one in the same folder.
+Exec=/bin/bash -c "cd \\$(dirname \\$(readlink -f \\$0)) && exec python3 ./run.py" %k
+Icon=startup-launcher
+Terminal=false
+Categories=Utility;
+Keywords=autostart;login;session;window;Anmeldung;Fenster;
+StartupNotify=false
