@@ -5,9 +5,12 @@ Name=Startup Launcher
 GenericName=Login startup manager
 Comment=Configurable login startup for programs and window placement
 Comment[de]=Programmstart bei der Anmeldung samt Fensterplatzierung einrichten
-# %k is this .desktop file, so ./run.py is always the one in the same folder.
-Exec=/bin/bash -c "cd \\$(dirname \\$(readlink -f \\$0)) && exec python3 ./run.py" %k
-Icon=startup-launcher
+# %k is the path of this file, so the program beside it is the one that starts -- wherever the
+# folder was copied to. The same path repairs Icon= in place: a .desktop file cannot point at its
+# icon with a relative path (the spec reads one as a theme name), so the launcher writes the
+# absolute path of the icon next to it whenever the folder has moved.
+Exec=/bin/bash -c "s=\\$(readlink -f \\"\\$0\\"); d=\\${s%/*}; i=\\$d/resources/startup-launcher.png; grep -qxF \\"Icon=\\$i\\" \\"\\$s\\" || { I=\\$i awk '/^Icon=/{print \\"Icon=\\" ENVIRON[\\"I\\"]; next}1' \\"\\$s\\" > \\"\\$s.new\\" && mv -f \\"\\$s.new\\" \\"\\$s\\"; }; cd \\"\\$d\\" && exec python3 ./run.py" %k
+Icon=/home/joruf/Applications/startup-launcher/resources/startup-launcher.png
 Terminal=false
 Categories=Utility;
 Keywords=autostart;login;session;window;Anmeldung;Fenster;
