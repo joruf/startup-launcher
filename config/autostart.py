@@ -2,7 +2,9 @@
 
 import shutil
 import sys
+from pathlib import Path
 
+import paths
 from paths import AUTOSTART_DESKTOP_FILENAME, AUTOSTART_DIR, ICON_FILE, MAIN_SCRIPT, PROJECT_ROOT
 
 # Tells run.py that this start came from the login autostart entry: stay tray-only
@@ -21,13 +23,43 @@ def _python_executable() -> str:
     return sys.executable or shutil.which("python3") or "/usr/bin/python3"
 
 
+def _launcher_icon() -> Path:
+    """
+    Return an icon path the autostart entry can still read after this process ends.
+
+    The executable unpacks its icon into a temporary directory that is deleted on
+    exit, so a copy is kept in the per-user data directory - always at the same
+    place, so refresh_if_enabled() does not see a new entry on every start.
+    """
+    if not paths.IS_FROZEN:
+        return ICON_FILE
+    kept = paths.USER_DATA_DIR / ICON_FILE.name
+    try:
+        kept.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(str(ICON_FILE), str(kept))
+    except OSError:
+        pass
+    return kept
+
+
+def _launch_lines() -> str:
+    """The Exec= line, plus the Path= line a checkout needs to find its modules."""
+    if paths.IS_FROZEN:
+        # The single-file executable is the whole program; no script, and no working
+        # directory into its unpacked files, which are gone after it exits.
+        return f'Exec="{paths.executable()}" {AUTOSTART_FLAG}\n'
+    return (
+        f'Exec="{_python_executable()}" "{MAIN_SCRIPT}" {AUTOSTART_FLAG}\n'
+        f"Path={PROJECT_ROOT}\n"
+    )
+
+
 def _desktop_entry_content() -> str:
     return (
         "[Desktop Entry]\n"
         "Type=Application\n"
-        f'Exec="{_python_executable()}" "{MAIN_SCRIPT}" {AUTOSTART_FLAG}\n'
-        f"Path={PROJECT_ROOT}\n"
-        f"Icon={ICON_FILE}\n"
+        f"{_launch_lines()}"
+        f"Icon={_launcher_icon()}\n"
         "Terminal=false\n"
         "StartupNotify=false\n"
         "X-GNOME-Autostart-enabled=true\n"

@@ -13,7 +13,8 @@ and architecture, see [README.md](README.md) and the
 Startup Launcher never shows a window when it starts - it only puts an icon
 in your system tray. **Click the tray icon** to open the main window.
 
-If you've never used the app before, `entries.json` doesn't exist yet, so the
+If you've never used the app before, `entries.json` (in
+`~/.config/startup-launcher/`) doesn't exist yet, so the
 table starts out either empty or pre-filled from `entries.example.json`
 (whichever is present) - see [README.md](README.md#usage) for how to seed it.
 

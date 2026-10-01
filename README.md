@@ -61,24 +61,108 @@ chmod +x run.py
 
 `entries.json`, `window_geometry.json`, and `settings.json` hold your
 personal data (your own commands/paths, window positions, preferences) and
-are git-ignored - they're created automatically on first run, seeded from
-`entries.example.json` if present, or empty otherwise. To start from the
+live in `~/.config/startup-launcher/` (`$XDG_CONFIG_HOME` is honoured) -
+outside the checkout, so a checkout and the single-file executable share them.
+They're created automatically on first run, seeded from `entries.example.json`
+if present, or empty otherwise. Older versions kept them in the project
+directory: on the first start of a checkout without the new files they are
+copied from there once, and the old files are left in place. To start from the
 bundled example entries instead of empty:
 
 ```bash
-cp entries.example.json entries.json
+mkdir -p ~/.config/startup-launcher
+cp entries.example.json ~/.config/startup-launcher/entries.json
 ```
 
 See the **[User Manual](MANUAL.md)** for the full day-to-day
 usage guide (table interactions, groups, delays, window position memory,
 autostart, single-instance behavior).
 
+`./run.py --version` prints the version (see [Versioning](#versioning)) and
+exits without opening a window.
+
+### Single-file executable (no Python needed)
+
+Startup Launcher can also be built as one executable file that carries
+Python, tkinter and the GTK bindings for the tray icon. One script does the
+whole build:
+
+```bash
+./build-exe.py          # -> dist/startup-launcher-linux-x86_64-<version>-build<build>
+```
+
+The file name carries the version, e.g. `startup-launcher-linux-x86_64-0.4.6-build17`.
+
+- **Linux only.** Window handling needs `wmctrl`/`xprop` (X11), the
+  single-instance lock `fcntl` and a Unix socket, the autostart the
+  freedesktop `~/.config/autostart`. A Windows version would need a port, not
+  just a build.
+- **The file runs on systems with the same or a newer glibc as the build
+  machine.** Build on the oldest system you want to support. The release
+  workflow uses Ubuntu 22.04.
+- **Build machine:** `python3-venv`, `python3-tk`, `python3-gi` and
+  `gir1.2-gtk-3.0`. The system Python is used, because only it sees
+  PyGObject; `build-exe.py` links it into its private build environment in
+  `build/exe/`. Without PyGObject the build still works, but has no tray icon.
+- `--clean` rebuilds that build environment, `--keep-env` reuses it without
+  updating.
+- After downloading, make the file executable once:
+  `chmod +x startup-launcher-linux-*`.
+- **Run Automatically at Startup** from the executable writes an autostart
+  entry that starts the executable itself (no interpreter, no `Path=`); its
+  icon is copied to `~/.local/share/startup-launcher/`. Whichever variant -
+  checkout or executable - starts last points the entry at itself.
+
+What stays outside the file, on purpose: `wmctrl` and `xprop`, and of course
+every program you configure. They are started with the system's own library
+paths, never with the ones the executable unpacks for itself.
+
+Every push to `main` runs `.github/workflows/release-exe.yml`. It builds the
+file on GitHub (Ubuntu 22.04) and publishes it as the release
+`v<version>-build<build>`; the build number changes with every commit, so
+every push gets its own release. Startup Launcher has no updater: download a
+newer file to update.
+
+## Versioning
+
+The number is never typed, it is derived from the commit history by `version.py`:
+
+| part | meaning |
+|---|---|
+| major | raised by hand, only for a release that justifies it |
+| minor | commits that added a new module under `ui/` or `services/` (`__init__.py` aside) - a new capability |
+| patch | commits since that last happened |
+| build | total number of commits |
+
+The first commit brought the whole application and counts as the first new
+module, so the first working state is `0.1.x`. Renamed modules do not count.
+**Help > About** and `--version` show the full form together with the short
+hash and the date of the last commit, so a number in a bug report leads back
+to an exact commit.
+
+The derived value is cached in a `VERSION` file, which is **not** checked in -
+it is derived, and a checked-in copy would be stale one commit later. The
+commit hook rewrites it, so an installation copied without `.git` still knows
+its version; the single-file executable carries the file written by
+`build-exe.py`. Activate the hook once per checkout:
+
+```bash
+git config core.hooksPath .githooks
+python3 version.py            # prints the current version
+python3 version.py --write    # what the hook does
+```
+
+Set `STARTUP_LAUNCHER_VERSION` to pin a value for a test or a one-off run.
+Without a history, without a `VERSION` file and without that variable the
+version reads `unknown` - an invented `0.0.0` would look real and send bug
+reports the wrong way.
+
 ## Look & Feel
 
 The ttk theme (`ui/style.py`) is copied 1:1 from `devserver-commander`
 (same zinc/neutral-gray palette, buttons, treeview), so both tools look
 alike. Data lives in `entries.json`/`window_geometry.json`/`settings.json`
-next to the script (all git-ignored - your personal data), read/written
+in `~/.config/startup-launcher/` (your personal data), read/written
 through `json_store.py` for atomic writes and resilient reads. See the
 **[Technische Dokumentation](TECHNISCHE-DOKUMENTATION.md)** for the full
 architecture (module responsibilities, persistence, IPC/single-instance
@@ -91,10 +175,13 @@ startup-launcher/
 ├── run.py                     # thin entry point
 ├── paths.py                   # shared path constants
 ├── json_store.py              # atomic writes + resilient reads for the JSON files below
-├── entries.json                # your data (git-ignored)
-├── entries.example.json        # generic template, committed - copy to entries.json
-├── window_geometry.json        # last-seen position/size per entry (git-ignored)
-├── settings.json               # scan/login-launch/restore/clean-shutdown settings (git-ignored)
+├── version.py                 # derives the version from the commit history; no number is typed
+├── build-exe.py               # builds the single-file executable with PyInstaller
+├── .githooks/post-commit      # refreshes the VERSION file after every commit
+├── entries.example.json        # generic template, committed - copy to ~/.config/startup-launcher/entries.json
+├── entries.json                # former location of your data (git-ignored), copied once to ~/.config/startup-launcher/
+├── window_geometry.json        # former location, as above: last-seen position/size per entry
+├── settings.json               # former location, as above: scan/login-launch/restore/clean-shutdown settings
 ├── models/entries.py           # schema, default seed, JSON persistence
 ├── models/geometry.py          # window_geometry.json persistence
 ├── services/launcher.py        # process start + wmctrl window state + per-entry delay

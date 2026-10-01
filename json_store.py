@@ -32,6 +32,8 @@ def save_json_atomic(path: Path, data) -> None:
     target (os.replace is atomic on POSIX) - a crash or kill mid-write can never
     leave the target file truncated/corrupted.
     """
+    # The per-user config directory does not exist before the first save.
+    path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:

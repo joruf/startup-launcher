@@ -17,6 +17,7 @@ from services import launcher
 from services import session_log
 from services.instance_ipc import InstanceControlServer
 from services.single_instance import enforce_single_instance
+import version
 from ui.entry_dialog import EntryDialog
 from ui.settings_dialog import SettingsDialog
 from ui.style import MUTED_FG, PANEL_BG, SELECTION_COLOR, TEXT_FG, configure_ui_style
@@ -299,7 +300,8 @@ class StartupLauncherApp:
     def _show_about(self):
         messagebox.showinfo(
             "About Startup Launcher",
-            "Startup Launcher\n\n"
+            "Startup Launcher\n"
+            f"Version {version.label()}\n\n"
             "Configure, launch, and restore the window positions of your "
             "login startup programs.",
         )

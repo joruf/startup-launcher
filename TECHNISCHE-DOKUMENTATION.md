@@ -33,7 +33,14 @@ Name zur Importzeit gebunden wurde.
 ## 2. Persistenz (`json_store.py`)
 
 Alle drei Datendateien (`entries.json`, `window_geometry.json`,
-`settings.json`) laufen durch dieselben zwei Funktionen:
+`settings.json`) liegen in `~/.config/startup-launcher/` (`paths.CONFIG_DIR`,
+`$XDG_CONFIG_HOME` wird beachtet) — nicht im Projektverzeichnis, weil das
+Einzeldatei-Programm sein Projektverzeichnis bei jedem Ende löscht (siehe
+[Abschnitt 9](#9-einzeldatei-programm-frozen-modus)). Ältere Versionen
+legten sie ins Projektverzeichnis: `paths.migrate_legacy_user_data()` kopiert
+sie beim Start eines Checkouts einmalig um, wenn am neuen Ort noch nichts
+liegt, und lässt die alten Dateien stehen. Alle drei laufen durch dieselben
+zwei Funktionen:
 
 - **`load_json(path, default)`** — gibt `default` zurück, wenn die Datei
   fehlt, leer oder kaputt ist (`JSONDecodeError`/`OSError`), statt eine
@@ -41,6 +48,7 @@ Alle drei Datendateien (`entries.json`, `window_geometry.json`,
   nächsten Start also nie.
 - **`save_json_atomic(path, data)`** — schreibt in eine temporäre Datei im
   selben Verzeichnis und benennt sie per `os.replace()` um (auf POSIX atomar).
+  Das Verzeichnis legt sie vorher an, falls es noch fehlt.
   Ein Kill/Absturz mitten im Schreiben kann die Zieldatei nie in einem
   halbgeschriebenen Zustand hinterlassen.
 
@@ -100,6 +108,12 @@ wird bewusst so erzeugt, dass er nicht von der Login-Umgebung abhängt:
 - **`X-GNOME-Autostart-Delay=10`**: Cinnamon/GNOME feuern Autostart-Einträge,
   während das Panel samt Systray-Bereich noch hochkommt. Der Lauf in dieses
   Rennen hinein kostete das Tray-Icon.
+
+Im Einzeldatei-Programm lautet die Zeile `Exec="<Programmdatei>" --autostart`
+— kein Interpreter, kein Skript, kein `Path=` ins entpackte Temp-Verzeichnis;
+`Icon=` zeigt auf eine Kopie in `~/.local/share/startup-launcher/`, immer am
+selben Ort, damit `is_outdated()` nicht bei jedem Start einen neuen Inhalt
+sieht.
 
 `refresh_if_enabled()` wird bei **jedem** App-Start aufgerufen
 (`StartupLauncherApp.__init__`) und schreibt eine vorhandene, aber inhaltlich
@@ -326,6 +340,8 @@ xvfb-run -a python3 -m unittest discover -s tests -v   # headless, wie in CI
 | `test_ui_main_window.py` | `ui/main_window.py` | Inline-Edit öffnen/committen/abbrechen (inkl. der Doppelklick-Suppress-Counter-Regression von oben), Checkbox-/Gruppen-Kaskade, Launch-Button, Sortierung, Move Up/Down, Delete (bestätigt/abgelehnt), externe `entries.json`-Änderungserkennung, Autostart-Lauf (startet Einträge, respektiert `launch_at_login`), Fenstersichtbarkeit manuell vs. Autostart, Statuszeile aus einem Worker-Thread |
 | `test_ui_entry_dialog.py` | `ui/entry_dialog.py` | Pflichtfeld-Validierung, Speichern-Ergebnisform, mehrzeiliger Befehl bleibt beim Speichern unverändert |
 | `test_ui_settings_dialog.py` | `ui/settings_dialog.py` | Vorbefüllung, Speichern-Ergebnisform, Fallback bei ungültigem Scan-Intervall |
+| `test_executable.py` | `paths.py`, `config/autostart.py`, `run.py`, `bootstrap_ui.py`, `build-exe.py` | Frozen-Modus (gespielt, nie gebaut): Ressourcen aus `sys._MEIPASS`, Dateiname je Plattform/Version, Autostart-Eintrag startet die Programmdatei, Icon-Kopie, kein `-m pip`, keine gi-Prüfung, bereinigte Umgebung für gestartete Einträge, einmalige Datenmigration, Spec-Datei kompiliert |
+| `test_version.py` | `version.py` | Ableitung aus Wegwerf-Repositories (Minor/Patch/Build, `__init__.py` und Umbenennungen zählen nicht), Reihenfolge Umgebungsvariable → Historie → `VERSION`-Datei, ehrliches `unknown`, Commit-Hook vorhanden |
 
 Die `test_ui_*`-Dateien bauen jeweils eine isolierte `StartupLauncherApp`
 gegen temporäre Datendateien auf (alle relevanten `*_FILE`-Konstanten werden
@@ -358,6 +374,10 @@ X11-Display bereit, sodass exakt dieselben Tests laufen wie lokal.
   `ubuntu-22.04`/`ubuntu-24.04` × Python `3.11`/`3.12`. Installiert
   `python3-tk`, `wmctrl`, `x11-utils`, `xvfb`; führt zuerst den schnellen
   Contract-Test aus, danach die volle Suite unter `xvfb-run -a`.
+- **`.github/workflows/release-exe.yml`** — baut bei jedem Push auf `main`
+  das Einzeldatei-Programm auf `ubuntu-22.04` (System-Python wegen
+  PyGObject, vollständige Historie für die Versionsnummer) und
+  veröffentlicht es als Release `v<version>-build<build>`.
 - **`.github/workflows/os-matrix.yml`** — manuell auslösbar
   (`workflow_dispatch`) für gezielte On-Demand-Checks auf einer bestimmten
   OS/Python-Kombination, z. B. über das lokale `os-test-matrix`-Tooling.
@@ -374,3 +394,54 @@ X11-Display bereit, sodass exakt dieselben Tests laufen wie lokal.
   `launch_entry` noch die Tabelle prüfen, ob der Zielprozess schon läuft;
   zweimal auf ▶ klicken startet ihn zweimal (siehe
   [Benutzerhandbuch](MANUAL.md#4-launching-programs)).
+
+## 9. Einzeldatei-Programm (Frozen-Modus)
+
+`build-exe.py` baut mit PyInstaller eine einzige ausführbare Datei
+(`dist/startup-launcher-linux-<arch>-<version>-build<build>`, Name aus
+`paths.executable_name()`). Es legt eine eigene Build-venv in `build/exe/` an
+— ohne System-Pakete, aber mit verlinktem System-PyGObject, das pip nicht
+installieren kann — und begrenzt die GTK-Daten über `hooksconfig` (keine
+Icon-Themes, nur `de`/`en`), sonst packt PyInstaller jedes Theme des
+Build-Rechners ein. Danach startet es das Ergebnis einmal mit `--version`.
+Nur Linux: Fensterverwaltung, Lock und IPC sind Linux-spezifisch. Gebaut wird
+auf der ältesten unterstützten Ubuntu-Version, weil die Datei nur auf
+Systemen mit gleicher oder neuerer glibc läuft.
+
+Im Programm ist `paths.IS_FROZEN` gesetzt, und einiges läuft anders:
+
+- **Ressourcen aus dem entpackten Verzeichnis.** `PROJECT_ROOT` ist
+  `sys._MEIPASS`; Icon, `entries.example.json` und `VERSION` liegen dort im
+  selben relativen Layout wie im Checkout. Geschrieben wird dort nie etwas —
+  das Verzeichnis verschwindet beim Beenden.
+- **Kein pip, kein Interpreter.** `sys.executable` ist das Programm selbst;
+  `bootstrap_ui` installiert in diesem Modus keine Python-Pakete, und `run.py`
+  prüft PyGObject nicht mehr (ist eingebaut) — nur noch `wmctrl`.
+- **Kindprozesse mit den Bibliotheken des Systems.** PyInstaller setzt
+  `LD_LIBRARY_PATH` (und über die GTK-Hooks `GI_TYPELIB_PATH` u. a.) auf die
+  entpackten Dateien. Geerbt würden die vom Nutzer konfigurierten Programme,
+  `wmctrl` und `xprop` fremde Bibliotheken laden.
+  `paths.use_system_environment_for_children()` ersetzt deshalb beim Start
+  einmal `subprocess.Popen`: jedes Kind bekommt `paths.child_environment()`,
+  ohne Einträge, die in `sys._MEIPASS` zeigen, und mit dem ursprünglichen
+  `LD_LIBRARY_PATH`.
+- **Autostart** startet die Programmdatei selbst (siehe
+  [`config/autostart.py`](#configautostartpy)).
+- **Version** nur aus der eingebetteten `VERSION`-Datei, nie aus git.
+
+Ein Updater existiert nicht; eine neuere Datei wird einfach heruntergeladen.
+
+## 10. Versionsnummer (`version.py`)
+
+Die Nummer wird nie von Hand gepflegt, sondern aus der Commit-Historie
+abgeleitet, genauso wie bei Mint Cleaner und Branchly: **Major** von Hand,
+**Minor** = Anzahl der Commits, die ein neues Modul unter `ui/` oder
+`services/` hinzugefügt haben (ohne `__init__.py`, Umbenennungen zählen nicht),
+**Patch** = Commits seitdem, **Build** = alle Commits. Der erste Commit
+brachte die ganze Anwendung und zählt als erste Ankunft. Quellen der Reihe
+nach: `STARTUP_LAUNCHER_VERSION`, die git-Historie, die nicht eingecheckte
+`VERSION`-Datei (vom Hook `.githooks/post-commit` nach jedem Commit
+geschrieben, aktivieren mit `git config core.hooksPath .githooks`). Ohne alle
+drei heißt die Version ehrlich `unknown`. Angezeigt wird sie unter
+**Help > About** und von `--version`, das `run.py` vor jedem GUI-Import
+beantwortet.
